@@ -3,9 +3,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
+import { ActorLedger } from "../src/actors.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
-import { buildSystemPromptAppendix, type InjectContext } from "../src/inject.ts";
+import {
+  buildRebuildDump,
+  buildSystemPromptAppendix,
+  isCheckpointEmpty,
+  type InjectContext,
+} from "../src/inject.ts";
 import { reconcile } from "../src/reconcile.ts";
 
 function tempRoot(): string {
@@ -46,4 +52,40 @@ test("buildSystemPromptAppendix caches but never serves a stale prompt", () => {
 
   db.close();
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("buildRebuildDump surfaces in-flight actors under ## Active actors", () => {
+  const root = tempRoot();
+  const db = openDb(":memory:");
+  const pid = "abc123";
+  // A real checkpoint, so the dump isn't skipped as empty.
+  write(root, "sessions/s1/checkpoint.md", '# Session checkpoint\n\n## §1 Active intent\n> "do the thing"\n');
+  const ledger = new ActorLedger({ db, root });
+  ledger.record("started", "s1", pid, { id: "live1", type: "explore", description: "scanning the tree" });
+  ledger.record("completed", "s1", pid, { id: "done1", result: "finished" });
+
+  const ctx: InjectContext = { root, sid: "s1", pid, caps: DEFAULT_CONFIG.checkpoint.pushCaps };
+  const dump = buildRebuildDump(db, ctx)!;
+  assert.match(dump, /## Active actors/);
+  assert.match(dump, /live1 · explore · running — scanning the tree/);
+  assert.doesNotMatch(dump, /done1/, "completed actors are not in-flight");
+
+  // With no in-flight actors the section is omitted entirely.
+  ledger.record("completed", "s1", pid, { id: "live1", result: "done now" });
+  assert.doesNotMatch(buildRebuildDump(db, ctx)!, /## Active actors/);
+
+  db.close();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("isCheckpointEmpty treats the §4 subagents placeholder as empty", () => {
+  assert.equal(isCheckpointEmpty(undefined), true);
+  assert.equal(
+    isCheckpointEmpty("# Session checkpoint\n\n## §4 Subagents\n(no subagents this session)\n"),
+    true,
+  );
+  assert.equal(
+    isCheckpointEmpty('## §1 Active intent\n> "real intent"\n'),
+    false,
+  );
 });

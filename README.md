@@ -164,9 +164,18 @@ Deliberate adaptations, in roughly decreasing order of consequence:
    leaves off by default — so the delta remains a condensed text handoff (tool I/O clipped
    to 500 chars, whole delta capped at ~100KB, newest kept). Dream/distill still run as
    subprocesses (long-running, fire-and-forget, process-isolated).
-6. **No task registry / actor system.** checkpoint.md keeps all 11 sections for
-   structural fidelity, but §4 Task tree is pinned to "(no task registry)" and the
-   subagent progress machinery is dropped.
+6. **Actor (subagent) ledger, but no user task graph.** When `@tintinweb/pi-subagents`
+   is loaded, the extension observes its lifecycle events over `pi.events` — a soft,
+   optional dependency: no `import`, no spawn RPC, purely serializable event payloads —
+   and derives an `actor` ledger plus per-subagent `progress.md` journals under
+   `sessions/<sid>/tasks/<id>/` (synthesized from completion payloads, since we can't run
+   a `postStop` hook inside another extension's subagent). checkpoint §4 (renamed Task
+   tree → Subagents) is reconciled from that ledger via an inlined SUBAGENT PROGRESS
+   block, and the rebuild dump surfaces in-flight actors under `## Active actors`. What
+   MiMoCode had that we still don't: the *user task graph* (`task`/`task_event`) —
+   pi-subagents exposes the actor half only. With pi-subagents absent the ledger stays
+   empty and §4 renders "(no subagents this session)"; nothing breaks. Toggle the whole
+   layer with `"tasks": { "enabled": false }`.
 7. **History rows are keyed by `(session_id, seq)`** with a synthetic
    `message_id = "<sid>#<seq>"`, rather than MiMoCode's message/part IDs — pi exposes
    messages, not parts. Dream/distill prompts document this schema for their SQL phase.

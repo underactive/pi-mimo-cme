@@ -73,8 +73,9 @@ pi-coupled modules are wired in `index.ts`.
 src/
   index.ts        # FACTORY. env guard, open DB, wire every pi.on handler, register tools/commands, close on shutdown
   config.ts       # DEFAULT_CONFIG + config.json overlay & validation        [pure]
-  paths.ts        # memory root, pid/sid → file paths, type-from-key regex    [pure]  ← source of truth for layout
-  db.ts           # openDb/migrate (PRAGMA user_version), schema SQL, meta get/set
+  paths.ts        # memory root, pid/sid → file paths, type-from-key regex, actor tasks/ paths   [pure]  ← source of truth for layout
+  db.ts           # openDb/migrate (PRAGMA user_version), schema SQL (memory_fts, history_fts, meta, actor), meta get/set
+  actors.ts       # actor (subagent) ledger: pi-subagents event → actor row + progress.md; §4/rebuild renderers   [pure]
   fts.ts          # buildFtsQuery (OR + AND), memorySearch (score floor), historySearch/around   [pure-ish]
   reconcile.ts    # tree walk + fingerprint upsert/prune (+ optional "cc" scope)
   budget.ts       # token estimate + budgetedRead with truncation marker      [pure]
@@ -134,7 +135,7 @@ flowchart TD
 
 | pi event | Handler | What it does |
 |---|---|---|
-| `session_start` | `session_start` | set `pendingRebuild` on resume/fork; background JSONL **backfill** (`setTimeout 0`); maybe auto **dream/distill**; initial footer |
+| `session_start` | `session_start` | set `pendingRebuild` on resume/fork; **reap stale actors** on resume; background JSONL **backfill** (`setTimeout 0`); maybe auto **dream/distill**; initial footer |
 | `session_compact` | `session_compact` | set `pendingRebuild` (the rebuild dump fires next turn) |
 | `before_agent_start` ①| `inject_system_prompt` | **append** memory instructions + project/global memory + keys index to `event.systemPrompt` |
 | `before_agent_start` ②| `inject_rebuild` | once, if `pendingRebuild`: emit the `mimo-cme:rebuild` dump message |
@@ -142,13 +143,21 @@ flowchart TD
 | `message_end` | `message_end` | extract the finalized message into `history_fts`; refresh footer |
 | `turn_end` | `turn_end` | `maybeCheckpoint()` on threshold crossing; refresh footer |
 | `session_before_compact` | `session_before_compact` | force a checkpoint and `await waitForIdle(60s)` so state is captured before pi compacts |
-| `tool_call` | `tool_call_guard` | block `write`/`edit` under the memory root except `notes.md` / project `MEMORY.md` |
-| `session_shutdown` | `session_shutdown` | `db.close()` |
+| `tool_call` | `tool_call_guard` | block `write`/`edit` under the memory root except `notes.md` / project `MEMORY.md` (and `tasks/**`) |
+| `session_shutdown` | `session_shutdown` | unsubscribe the `pi.events` bus handlers, then `db.close()` |
 
 > **Multiple `before_agent_start` handlers are intentional.** pi accumulates the messages
 > each returns and chains `systemPrompt`. That's why injection, rebuild, and nudge are three
 > separate registrations — and why injection must **append** to `event.systemPrompt`, never
 > replace it (replacing would clobber whatever an earlier handler added).
+
+> **`pi.events` bus subscriptions (Phase 2, gated on `config.tasks.enabled`).** Separately from
+> the `pi.on(...)` lifecycle handlers above, `index.ts` subscribes to the cross-extension bus:
+> `subagents:created|started|completed|failed|compacted` → `ActorLedger.record(...)` (+ footer
+> refresh), and `subagents:ready` → log. These run OUTSIDE the `safe()` path, so each wraps its
+> own try/catch (a throw on the shared bus could disrupt other extensions), and their
+> unsubscribe fns are collected and called on `session_shutdown`. This is how the soft
+> `@tintinweb/pi-subagents` dependency is consumed — observation only, no import, no spawn RPC.
 
 ---
 
@@ -361,7 +370,16 @@ history_fts(id, session_id, project_id, seq, kind, tool_name, body, time_created
 meta(key TEXT PRIMARY KEY, value TEXT)   -- last_checkpoint_seq:<sid>, crossed:<sid>,
                                          -- last_dream_at:<pid>,
                                          -- last_distill_at:<pid>, backfill:<file>
+actor(session_id, id, project_id, type, description, status, tokens, tool_uses,   -- Phase 2 (SCHEMA_V2)
+      compaction_count, result_summary, error, created_at, updated_at, completed_at)
+            PRIMARY KEY(session_id, id) ;  status ∈ created|running|completed|error|stopped
+            -- DERIVED from pi-subagents events; the durable artifact is the per-actor
+            -- progress.md journal on disk (indexed into memory_fts as type='progress')
 ```
+
+> `actor` is a plain table, **not** an FTS vtab — it's a structured ledger queried by
+> `session_id`/`status`, while the searchable *content* (the progress.md journals) flows through
+> `memory_fts` via the normal reconcile walk. So the FTS war story below doesn't apply to it.
 
 > 🔥 **The FTS5 war story — do not "simplify" the delete triggers.** For external-content
 > FTS5, removing a row's tokens requires the *magic command form*:
@@ -483,7 +501,11 @@ Documented in full in the README; the load-bearing ones for a developer:
    and tool schema, so the delta stays a condensed text handoff. True reuse would need
    MiMoCode's `fork=true` (the parent's full prefix + tool schema), which even MiMoCode leaves
    off by default. Dream/distill remain subprocesses.
-6. **No task registry** — `checkpoint.md §4 Task tree` is pinned to "(no task registry)".
+6. **Actor (subagent) ledger, no user task graph** — `checkpoint.md §4` (renamed Task tree →
+   Subagents) is reconciled from `actors.ts`, which observes `@tintinweb/pi-subagents` events
+   over `pi.events` (soft/optional dep). We get the *actor* half (who ran, status, result), not
+   MiMoCode's user *task graph* (`task`/`task_event`). pi-subagents absent ⇒ §4 renders
+   "(no subagents this session)". Gate with `"tasks": { "enabled": false }`.
 7. **History keyed by `(session_id, seq)`** with synthetic `message_id = "<sid>#<seq>"` — pi
    exposes messages, not parts.
 8. **Auto-pass scheduling in `meta`**, first sighting starts the clock.

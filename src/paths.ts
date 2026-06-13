@@ -76,7 +76,37 @@ export function notesPath(sid: string, root: string = memoryRoot()): string {
   return path.join(sessionDir(sid, root), "notes.md");
 }
 
-export type MemoryType = "memory" | "checkpoint" | "notes" | "free";
+/**
+ * Per-session subagent (actor) workspace, mirroring MiMoCode's
+ * `sessions/<sid>/tasks/<actorId>/`. Each subagent gets a `progress.md` journal
+ * synthesized from its completion payload (Phase 2). The directory is under the
+ * memory root, so reconcile's tree walk indexes the journals automatically.
+ */
+export function tasksDir(sid: string, root: string = memoryRoot()): string {
+  return path.join(sessionDir(sid, root), "tasks");
+}
+
+export function actorTaskDir(sid: string, actorId: string, root: string = memoryRoot()): string {
+  return path.join(tasksDir(sid, root), sanitizeActorId(actorId));
+}
+
+export function progressPath(sid: string, actorId: string, root: string = memoryRoot()): string {
+  return path.join(actorTaskDir(sid, actorId, root), "progress.md");
+}
+
+/**
+ * Actor IDs come from another extension's event payloads, so they could in
+ * theory contain path separators or traversal segments. Collapse anything that
+ * isn't a safe filename char to "_" so an actor ID can never escape its tasks
+ * subtree — the journals are written by the extension with raw fs (the path
+ * guard only constrains the main agent's tool calls, not our own writes).
+ */
+export function sanitizeActorId(actorId: string): string {
+  const safe = actorId.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_");
+  return safe.length > 0 ? safe.slice(0, 128) : "unknown";
+}
+
+export type MemoryType = "memory" | "checkpoint" | "notes" | "progress" | "free";
 
 /** Type detection from the file key, like MiMoCode's paths.ts regexes. */
 export function typeFromKey(key: string): MemoryType {
@@ -84,6 +114,7 @@ export function typeFromKey(key: string): MemoryType {
   if (/^memory/.test(base)) return "memory";
   if (/^checkpoint/.test(base)) return "checkpoint";
   if (/^notes/.test(base)) return "notes";
+  if (/^progress/.test(base)) return "progress";
   return "free";
 }
 

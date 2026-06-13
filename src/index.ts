@@ -16,6 +16,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { ActorLedger, buildSubagentProgress, type ActorEvent, type ActorPhase } from "./actors.ts";
 import { CheckpointManager, type WriterFn } from "./checkpoint.ts";
 import {
   buildDistillPrompt,
@@ -111,6 +112,11 @@ export default function piMimoCme(pi: ExtensionAPI) {
   // across the factory's reconcile call sites (here + reconcileAndNotify) so the
   // footer stays exact however memory_fts changed mid-turn. See footer-counts.ts.
   const counts = new FooterCounts();
+  // Actor (subagent) ledger (Phase 2): observes pi-subagents lifecycle events
+  // off the shared `pi.events` bus and derives the §4 source + progress.md
+  // journals. A soft dependency — with pi-subagents absent it simply stays
+  // empty. Shares the one DB handle, so it lives and dies with everything else.
+  const ledger = new ActorLedger({ db, root });
   /**
    * In-process checkpoint writer (Phase 1) — replaces the headless
    * `pi --no-extensions --no-session -p` subprocess. Builds a throwaway pi SDK
@@ -192,6 +198,11 @@ export default function piMimoCme(pi: ExtensionAPI) {
     thresholds: config.checkpoint.thresholds,
     maxWriterFailures: config.checkpoint.maxWriterFailures,
     runWriter,
+    // §4 Subagents source: the actor ledger for this session, capped. Omitted
+    // when the tasks layer is off, so the writer renders §4 as "(none)".
+    buildSubagentProgress: config.tasks.enabled
+      ? (sid) => buildSubagentProgress(db, sid, config.checkpoint.pushCaps.actors)
+      : undefined,
     log,
     notify,
   });
@@ -226,7 +237,12 @@ export default function piMimoCme(pi: ExtensionAPI) {
   function refreshStatus(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
     const { memIdx, projHist } = counts.snapshot();
-    ctx.ui.setStatus("mimo-cme", `🧠 ${memIdx} idx · ${projHist} hist`);
+    // Append a `· N actors` segment only while subagents are in flight this
+    // session (in-memory count, zero SQL on the hot path) — omitted otherwise so
+    // the footer stays clean when the tasks layer is unused.
+    const actors = ledger.activeCount(sidOf(ctx));
+    const actorSeg = actors > 0 ? ` · ${actors} actor${actors === 1 ? "" : "s"}` : "";
+    ctx.ui.setStatus("mimo-cme", `🧠 ${memIdx} idx · ${projHist} hist${actorSeg}`);
   }
 
   /**
@@ -375,6 +391,16 @@ export default function piMimoCme(pi: ExtensionAPI) {
     safe("session_start", (event, ctx) => {
       if (event.reason === "resume" || event.reason === "fork") pendingRebuild = true;
 
+      // On a resume the session id continues but its prior process is gone, so any
+      // actor row still marked running/created is stale (those subagents died with
+      // the old process). Reap them to "stopped" so the rebuild dump's "Active
+      // actors" reflects reality. A same-process compaction never hits this path,
+      // so genuinely in-flight actors there are preserved.
+      if (config.tasks.enabled && event.reason === "resume") {
+        const reaped = ledger.reapStale(sidOf(ctx));
+        if (reaped > 0) log(`actor: reaped ${reaped} stale running actor(s) on resume`);
+      }
+
       // Layer-4 backfill of this project's past sessions: background + idempotent.
       setTimeout(() => {
         try {
@@ -500,9 +526,50 @@ export default function piMimoCme(pi: ExtensionAPI) {
     }),
   );
 
+  // Phase 2: observe pi-subagents lifecycle events off the shared `pi.events`
+  // bus (soft dependency — no import, no spawn RPC; if pi-subagents isn't loaded
+  // these channels simply never fire). Each payload is serializable and recorded
+  // into the actor ledger; the writer reconciles it into §4 and the rebuild dump
+  // surfaces in-flight actors. Bus handlers run outside the `safe()` lifecycle
+  // path, so they wrap their own try/catch (a throw here could disrupt the bus).
+  const busUnsubs: (() => void)[] = [];
+  if (config.tasks.enabled) {
+    const recordActor = (phase: ActorPhase) => (data: unknown) => {
+      const ctx = latestCtx; // attribute the actor to whatever session is live now
+      if (!ctx) return;
+      const wrote = ledger.record(phase, sidOf(ctx), projectId(ctx.cwd), (data ?? {}) as ActorEvent);
+      if (wrote) log(`actor ${phase}: wrote ${wrote}`);
+      refreshStatus(ctx); // active-actor count may have changed
+    };
+    const onBus = (channel: string, handler: (data: unknown) => void): void => {
+      busUnsubs.push(
+        pi.events.on(channel, (data) => {
+          try {
+            handler(data);
+          } catch (err) {
+            reportError(`events:${channel}`, err);
+          }
+        }),
+      );
+    };
+    onBus("subagents:created", recordActor("created"));
+    onBus("subagents:started", recordActor("started"));
+    onBus("subagents:completed", recordActor("completed"));
+    onBus("subagents:failed", recordActor("failed"));
+    onBus("subagents:compacted", recordActor("compacted"));
+    onBus("subagents:ready", () => log("subagents: ready signal received"));
+  }
+
   pi.on(
     "session_shutdown",
     safe("session_shutdown", () => {
+      for (const off of busUnsubs.splice(0)) {
+        try {
+          off();
+        } catch {
+          /* unsubscribe is best-effort */
+        }
+      }
       db.close();
     }),
   );

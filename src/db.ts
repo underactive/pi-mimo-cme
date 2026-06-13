@@ -74,8 +74,40 @@ END;
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 `;
 
+/**
+ * Phase 2: the actor (subagent) ledger. A derived record of pi-subagents
+ * lifecycle events (subagents:created|started|completed|failed|compacted),
+ * consumed purely as serializable `pi.events` payloads — no object sharing with
+ * the other extension. The checkpoint writer reconciles this into checkpoint
+ * §4 Subagents; the rebuild dump surfaces in-flight actors. Keyed by
+ * (session_id, id) because actor IDs are unique within a run but the DB is
+ * machine-wide. Like every other table here it is a DERIVED index: dropping it
+ * loses only the actor ledger, never a curated memory file (the progress.md
+ * journals on disk are the durable artifact).
+ */
+const SCHEMA_V2 = `
+CREATE TABLE actor (
+  session_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  tokens INTEGER NOT NULL DEFAULT 0,
+  tool_uses INTEGER NOT NULL DEFAULT 0,
+  compaction_count INTEGER NOT NULL DEFAULT 0,
+  result_summary TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  completed_at INTEGER,
+  PRIMARY KEY (session_id, id)
+);
+CREATE INDEX actor_session_idx ON actor (session_id, updated_at);
+`;
+
 /** Sequential migrations keyed by PRAGMA user_version. */
-const MIGRATIONS: string[] = [SCHEMA_V1];
+const MIGRATIONS: string[] = [SCHEMA_V1, SCHEMA_V2];
 
 export function openDb(file: string): DatabaseSync {
   if (file !== ":memory:") {

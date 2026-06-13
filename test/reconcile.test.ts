@@ -53,6 +53,21 @@ test("reconcile indexes the tree with scope/scope_id/type and skips delta files"
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test("reconcile walks nested tasks/<id>/progress.md and types it 'progress'", () => {
+  const root = tempRoot();
+  const db = openDb(":memory:");
+  write(root, "sessions/s1/tasks/a1/progress.md", "# Subagent progress — a1\n\nfound the zebra bug");
+
+  const stats = reconcile(db, { root });
+  assert.equal(stats.indexed, 1);
+  const row = db
+    .prepare("SELECT scope, scope_id, type FROM memory_fts WHERE path LIKE '%tasks/a1/progress.md'")
+    .get() as { scope: string; scope_id: string; type: string };
+  assert.deepEqual([row.scope, row.scope_id, row.type], ["sessions", "s1", "progress"]);
+  db.close();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test("reconcile re-indexes on fingerprint change and prunes vanished files", () => {
   const root = tempRoot();
   const db = openDb(":memory:");

@@ -134,6 +134,55 @@ test("CheckpointManager: fires once per threshold, inlines delta in prompt, adva
   fs.rmSync(agent, { recursive: true, force: true });
 });
 
+test("CheckpointManager: inlines the SUBAGENT PROGRESS block from the injected builder", async () => {
+  const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpsa-"));
+  const root = path.join(agent, "pi-mimo-cme");
+  const db = openDb(":memory:");
+  const calls: WriterRequest[] = [];
+  const manager = new CheckpointManager({
+    db,
+    root,
+    thresholds: [20],
+    maxWriterFailures: 3,
+    log: () => {},
+    buildSubagentProgress: (sid) => `- ag1 · explore · completed — found it (sid=${sid})`,
+    runWriter: async (req) => {
+      calls.push(req);
+      return { ok: true } satisfies WriterResult;
+    },
+  });
+  manager.fireCheckpoint({ sid: "s1", pid: "p1", cwd: "/w", messages: [{ role: "user", content: "go" }] });
+  await manager.waitForIdle(1000);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0]!.prompt.includes("BEGIN SUBAGENT PROGRESS"));
+  assert.ok(calls[0]!.prompt.includes("ag1 · explore · completed — found it (sid=s1)"));
+  db.close();
+  fs.rmSync(agent, { recursive: true, force: true });
+});
+
+test("CheckpointManager: omits subagent progress when no builder is wired (renders placeholder)", async () => {
+  const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpsa0-"));
+  const root = path.join(agent, "pi-mimo-cme");
+  const db = openDb(":memory:");
+  const calls: WriterRequest[] = [];
+  const manager = new CheckpointManager({
+    db,
+    root,
+    thresholds: [20],
+    maxWriterFailures: 3,
+    log: () => {},
+    runWriter: async (req) => {
+      calls.push(req);
+      return { ok: true } satisfies WriterResult;
+    },
+  });
+  manager.fireCheckpoint({ sid: "s1", pid: "p1", cwd: "/w", messages: [{ role: "user", content: "go" }] });
+  await manager.waitForIdle(1000);
+  assert.ok(calls[0]!.prompt.includes("(no subagents this session)"));
+  db.close();
+  fs.rmSync(agent, { recursive: true, force: true });
+});
+
 test("CheckpointManager: gives up after max consecutive writer failures", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpf-"));
   const root = path.join(agent, "pi-mimo-cme");

@@ -5,8 +5,11 @@ import * as path from "node:path";
 import { test } from "node:test";
 import {
   agentDir,
+  actorTaskDir,
   memoryRoot,
+  progressPath,
   projectId,
+  sanitizeActorId,
   sessionsJsonlDir,
   typeFromKey,
 } from "../src/paths.ts";
@@ -56,5 +59,31 @@ test("typeFromKey regex detection", () => {
   assert.equal(typeFromKey("/x/checkpoint.md"), "checkpoint");
   assert.equal(typeFromKey("checkpoint-sqlite.md"), "checkpoint");
   assert.equal(typeFromKey("/x/notes.md"), "notes");
+  assert.equal(typeFromKey("/x/tasks/a1/progress.md"), "progress");
+  assert.equal(typeFromKey("progress-extra.md"), "progress");
   assert.equal(typeFromKey("/x/random.md"), "free");
+});
+
+test("progressPath / actorTaskDir resolve under the session's tasks subtree", () => {
+  const root = "/tmp/mem-root";
+  assert.equal(actorTaskDir("s1", "a1", root), path.join(root, "sessions", "s1", "tasks", "a1"));
+  assert.equal(progressPath("s1", "a1", root), path.join(root, "sessions", "s1", "tasks", "a1", "progress.md"));
+});
+
+test("sanitizeActorId neutralizes path separators and traversal so actors cannot escape tasks/", () => {
+  const root = "/tmp/mem-root";
+  assert.equal(sanitizeActorId("a1"), "a1");
+  assert.equal(sanitizeActorId("ag_2026-06"), "ag_2026-06");
+  assert.equal(sanitizeActorId(""), "unknown");
+  // Separators and leading dots are neutralized: the result can never be a
+  // traversal segment or contain a path separator.
+  for (const evil of ["../../etc/passwd", "..", "/abs/path", "a/b\\c"]) {
+    const safe = sanitizeActorId(evil);
+    assert.ok(!safe.includes("/") && !safe.includes("\\"), `separator survived: ${safe}`);
+    assert.ok(!safe.startsWith("."), `leading dot survived: ${safe}`);
+  }
+  // The resolved journal path therefore stays inside the tasks subtree.
+  const escaped = progressPath("s1", "../../../../etc/cron.d/x", root);
+  const tasksRoot = path.join(root, "sessions", "s1", "tasks");
+  assert.ok(escaped.startsWith(tasksRoot + path.sep), `journal path escaped: ${escaped}`);
 });

@@ -1,7 +1,8 @@
 /**
  * File templates (from MiMoCode's checkpoint-templates.ts) and section token
- * budgets. checkpoint.md keeps all 11 sections; §4 is adapted because pi has
- * no task registry.
+ * budgets. checkpoint.md keeps all 11 sections; §4 tracks subagent/actor
+ * activity (Phase 2) rather than MiMoCode's user task graph, which pi has no
+ * registry for.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -20,8 +21,8 @@ _Concrete next step, with verbatim quote when possible._
 _Session-specific working style only. Project-wide rules belong in MEMORY.md ## Rules._
 (none yet)
 
-## §4 Task tree
-_(no task registry in pi — the writer renders this as "(no task registry)")_
+## §4 Subagents
+_Subagent/actor activity this session (id · type · status — one-line result), reconciled from the actor ledger. Never invent actor IDs. Render "(no subagents this session)" when none ran._
 (none yet)
 
 ## §5 Current work
@@ -78,7 +79,7 @@ export const CHECKPOINT_SECTION_BUDGETS: Record<string, number> = {
   "§1 Active intent": 500,
   "§2 Next concrete action": 1000,
   "§3 Directives (this session)": 800,
-  "§4 Task tree": 1000,
+  "§4 Subagents": 1000,
   "§5 Current work": 2000,
   "§6 Files and code sections": 1500,
   "§7 Discovered knowledge (cross-task)": 2000,

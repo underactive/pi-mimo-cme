@@ -34,9 +34,13 @@ export function checkMemoryWrite(
   const notes = path.join(rootResolved, "sessions", sid, "notes.md");
   const projectMemory = path.join(rootResolved, "projects", pid, "MEMORY.md");
   const base = path.basename(rel);
+  const tasksPrefix = path.join("sessions", sid, "tasks") + path.sep;
   let detail: string;
   if (base === "checkpoint.md" || /^checkpoint-/.test(base)) {
     detail = "checkpoint.md is the checkpoint writer's domain — the main agent never edits it.";
+  } else if (rel.startsWith(tasksPrefix)) {
+    detail =
+      "the tasks/ subtree holds subagent progress journals — the extension synthesizes those from subagent lifecycle events; the main agent never writes there.";
   } else if (rel === path.join("global", "MEMORY.md") || rel.startsWith("global" + path.sep)) {
     detail =
       "global memory is read-only from the agent side; the dream pass promotes entries there.";

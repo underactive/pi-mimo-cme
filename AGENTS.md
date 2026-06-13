@@ -69,4 +69,16 @@ There is **no build, lint, or bundle step.** Tests cover the pure / pure-ish mod
 - **`before_agent_start` chains:** multiple handlers may register; each returns its own `{ systemPrompt }` /
   `{ message }`. **Always append** to `event.systemPrompt` (`event.systemPrompt + "\n\n" + appendix`), never replace.
 - **No memory-write tool.** Memory is written via ordinary `write`/`edit` calls; `guard.ts` (wired on `tool_call`)
-  blocks everything under the memory root except `sessions/<sid>/notes.md` and `projects/<pid>/MEMORY.md`.
+  blocks everything under the memory root except `sessions/<sid>/notes.md` and `projects/<pid>/MEMORY.md` (the
+  `sessions/<sid>/tasks/**` subtree is also blocked for the main agent — it's the actor ledger's domain).
+- **The actor (subagent) layer is a SOFT dependency on `@tintinweb/pi-subagents`** (`src/actors.ts`, Phase 2). We
+  never `import` it and never spawn through it — we only *observe* its `subagents:created|started|completed|failed|
+  compacted` events on the shared `pi.events` bus (serializable payloads, no object sharing). The `ActorLedger`
+  persists an `actor` table and synthesizes `sessions/<sid>/tasks/<id>/progress.md` journals from completion payloads
+  (we can't run a `postStop` hook inside another extension's subagent). checkpoint §4 (Subagents) is reconciled from
+  an inlined SUBAGENT PROGRESS block; the rebuild dump shows in-flight actors under `## Active actors`; the footer
+  appends `· N actors` from an **in-memory** count (never per-turn SQL). With pi-subagents absent the ledger stays
+  empty and §4 renders "(no subagents this session)" — nothing breaks. Gate it off with `"tasks": { "enabled": false }`.
+  Bus handlers run OUTSIDE the `safe()` lifecycle path, so they wrap their own try/catch and unsubscribe on
+  `session_shutdown` before `db.close()`. `actors.ts` is a **pure module** (no pi import) so it unit-tests under
+  `node --test` — keep it that way.

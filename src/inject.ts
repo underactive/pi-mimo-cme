@@ -5,6 +5,7 @@
  */
 import * as fs from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { buildActiveActorsSection } from "./actors.ts";
 import { budgetText, budgetedRead, estimateTokens } from "./budget.ts";
 import type { PushCaps } from "./config.ts";
 import {
@@ -22,8 +23,9 @@ export interface InjectContext {
 }
 
 /**
- * Adapted from MiMoCode's buildMemoryInstructions (subagent return format and
- * task-tree material dropped — pi has no task registry).
+ * Adapted from MiMoCode's buildMemoryInstructions. §4 tracks subagent/actor
+ * activity (Phase 2, reconciled from the actor ledger) rather than MiMoCode's
+ * user task graph, for which pi has no registry.
  */
 export function buildMemoryInstructions(ctx: InjectContext): string {
   const projectPath = projectMemoryPath(ctx.pid, ctx.root);
@@ -35,7 +37,7 @@ export function buildMemoryInstructions(ctx: InjectContext): string {
 You have a persistent file-based memory system. Four layers:
 
 - Project memory at \`${projectPath}\` — persistent across all sessions in this project. Contains: project context, rules, architecture decisions, durable cross-task knowledge.
-- Session checkpoint at \`${cpPath}\` — current session's structured state, written ONLY by the checkpoint writer. 11 sections covering active intent, next action, directives, current work, files, learnings, errors, live resources, design decisions, and open notes.
+- Session checkpoint at \`${cpPath}\` — current session's structured state, written ONLY by the checkpoint writer. 11 sections covering active intent, next action, directives, subagents, current work, files, learnings, errors, live resources, design decisions, and open notes.
 - Global memory at \`${globalPath}\` — user-level preferences and cross-project feedback that persist across all projects. Read-only from the agent side; the dream pass promotes entries there.
 - Raw history — every past session's conversation, indexed machine-wide. Search it with the \`history\` tool when curated memory has no answer.
 
@@ -215,7 +217,14 @@ export function isCheckpointEmpty(text: string | undefined): boolean {
   if (text === undefined) return true;
   for (const line of text.split("\n")) {
     const t = line.trim();
-    if (t === "" || t === "(none yet)" || t === "(none)" || t === "(no task registry)") continue;
+    if (
+      t === "" ||
+      t === "(none yet)" ||
+      t === "(none)" ||
+      t === "(no task registry)" ||
+      t === "(no subagents this session)"
+    )
+      continue;
     if (t.startsWith("#")) continue;
     if (t.startsWith("_") && t.endsWith("_")) continue;
     return false;
@@ -247,6 +256,11 @@ export function buildRebuildDump(db: DatabaseSync, ctx: InjectContext): string |
     dumped.add(nPath);
     sections.push(`## Session notes\n\n${notes.trimEnd()}`);
   }
+  // In-flight subagents (Phase 2). Non-terminal actors only — on a same-process
+  // compaction these are genuinely still running; on a cross-process resume the
+  // ledger reaps stale rows at session_start, so this is empty and omitted.
+  const actors = buildActiveActorsSection(db, ctx.sid, ctx.caps.actors);
+  if (actors !== undefined) sections.push(`## Active actors\n\n${actors}`);
   const keys = memoryKeysIndex(db, ctx, dumped);
   if (keys !== undefined) sections.push(`## Memory keys index\n\n${keys}`);
   sections.push(

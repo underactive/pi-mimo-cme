@@ -10,6 +10,8 @@ export interface PushCaps {
   global: number;
   notes: number;
   memoryKeys: number;
+  /** Token cap for the actor ledger views (writer §4 block + rebuild "Active actors"). */
+  actors: number;
 }
 
 export interface CmeConfig {
@@ -30,6 +32,13 @@ export interface CmeConfig {
   };
   history: { kinds: string[] };
   memory: { ccIndex: boolean };
+  /**
+   * Phase 2 subagent/actor layer. When enabled (default), the extension
+   * observes pi-subagents lifecycle events, records an actor ledger, and writes
+   * per-actor progress.md journals. A soft dependency: with pi-subagents absent
+   * the ledger simply stays empty. Set false to opt out of the wiring entirely.
+   */
+  tasks: { enabled: boolean };
   dream: { auto: boolean; intervalDays: number };
   distill: { auto: boolean; intervalDays: number };
 }
@@ -41,10 +50,18 @@ export const DEFAULT_CONFIG: CmeConfig = {
     reconcileOnSearch: true,
     reconcileDebounceMs: 4000,
     maxWriterFailures: 3,
-    pushCaps: { checkpoint: 11_000, memory: 10_000, global: 6_000, notes: 6_000, memoryKeys: 500 },
+    pushCaps: {
+      checkpoint: 11_000,
+      memory: 10_000,
+      global: 6_000,
+      notes: 6_000,
+      memoryKeys: 500,
+      actors: 2_000,
+    },
   },
   history: { kinds: ["user_text", "assistant_text", "tool_input", "tool_error"] },
   memory: { ccIndex: false },
+  tasks: { enabled: true },
   dream: { auto: true, intervalDays: 7 },
   distill: { auto: false, intervalDays: 30 },
 };
@@ -81,6 +98,9 @@ export function mergeConfig(base: CmeConfig, overlay: Record<string, unknown>): 
   }
   if (o.memory && typeof o.memory === "object" && typeof o.memory["ccIndex"] === "boolean") {
     out.memory.ccIndex = o.memory["ccIndex"];
+  }
+  if (o.tasks && typeof o.tasks === "object" && typeof o.tasks["enabled"] === "boolean") {
+    out.tasks.enabled = o.tasks["enabled"];
   }
   for (const pass of ["dream", "distill"] as const) {
     const p = o[pass];

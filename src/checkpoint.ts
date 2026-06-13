@@ -129,6 +129,13 @@ export interface CheckpointDeps {
   thresholds: readonly number[];
   maxWriterFailures: number;
   runWriter: WriterFn;
+  /**
+   * Builds the inlined SUBAGENT PROGRESS block (checkpoint §4 source) for a
+   * session, from the actor ledger. Optional and injected like runWriter so this
+   * module stays pure: when absent (tasks layer off / no ledger), the writer
+   * sees an empty block and §4 renders "(no subagents this session)".
+   */
+  buildSubagentProgress?: (sid: string) => string;
   log: (message: string) => void;
   /**
    * Optional UI toast. The writer runs in a headless in-process session with
@@ -253,6 +260,7 @@ export class CheckpointManager {
         memoryPath: projectMemoryPath(job.pid, root),
         notesPath: notesPath(job.sid, root),
         delta: job.delta,
+        subagentProgress: this.deps.buildSubagentProgress?.(job.sid) ?? "",
       });
       const result = await this.deps.runWriter({ prompt, cwd: job.cwd });
       if (result.ok) {

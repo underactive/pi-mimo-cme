@@ -24,6 +24,12 @@ test("guard blocks checkpoint.md and spillovers (writer's domain)", () => {
   assert.equal(spill.allowed, false);
 });
 
+test("guard blocks the tasks/ subtree with a subagent-journal message", () => {
+  const v = verdict(path.join(ROOT, "sessions", SID, "tasks", "a1", "progress.md"));
+  assert.equal(v.allowed, false);
+  assert.match(v.reason!, /subagent progress journals/);
+});
+
 test("guard blocks global memory", () => {
   const v = verdict(path.join(ROOT, "global", "MEMORY.md"));
   assert.equal(v.allowed, false);

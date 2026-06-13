@@ -7,6 +7,14 @@
   "pi": {
     "extensions": ["./src/index.ts"]
   },
+  "peerDependencies": {
+    "@tintinweb/pi-subagents": "*"
+  },
+  "peerDependenciesMeta": {
+    "@tintinweb/pi-subagents": {
+      "optional": true
+    }
+  },
   "scripts": {
     "test": "node --test 'test/*.test.ts'",
     "typecheck": "tsc --noEmit"

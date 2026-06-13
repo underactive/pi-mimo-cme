@@ -87,6 +87,9 @@ function statusText(deps: CommandDeps, cwd: string, sid: string): string {
   const projectHistory = db
     .prepare("SELECT COUNT(*) AS n FROM history_fts WHERE project_id = ?")
     .get(pid) as { n: number };
+  const actorRows = db
+    .prepare("SELECT status, COUNT(*) AS n FROM actor WHERE session_id = ? GROUP BY status ORDER BY status")
+    .all(sid) as unknown as { status: string; n: number }[];
   let dbSize = 0;
   try {
     dbSize = fs.statSync(dbPath(root)).size;
@@ -102,6 +105,7 @@ function statusText(deps: CommandDeps, cwd: string, sid: string): string {
     "",
     `memory files indexed: ${scopes.length === 0 ? "0" : scopes.map((s) => `${s.scope}=${s.n}`).join(" ")}`,
     `history rows: ${history.n} total, ${projectHistory.n} this project`,
+    `subagents (this session): ${actorRows.length === 0 ? "none" : actorRows.map((a) => `${a.status}=${a.n}`).join(" ")}`,
     `db: ${dbPath(root)} (${(dbSize / 1024).toFixed(1)} KB)`,
     `last dream: ${fmtMeta(`last_dream_at:${pid}`)} (auto=${deps.config.dream.auto}, every ${deps.config.dream.intervalDays}d)`,
     `last distill: ${fmtMeta(`last_distill_at:${pid}`)} (auto=${deps.config.distill.auto}, every ${deps.config.distill.intervalDays}d)`,
