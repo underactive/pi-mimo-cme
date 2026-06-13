@@ -5,7 +5,7 @@
  */
 import * as fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { metaGet, metaSet } from "./db.ts";
+import { metaGet, metaSet, recordWriterMetrics } from "./db.ts";
 import { checkpointPath, notesPath, projectMemoryPath, sessionDir } from "./paths.ts";
 import { checkpointWriterPrompt } from "./prompts/checkpoint-writer.ts";
 import { CHECKPOINT_TEMPLATE, MEMORY_TEMPLATE, NOTES_TEMPLATE, ensureFile } from "./templates.ts";
@@ -99,11 +99,31 @@ export function newlyCrossed(
   return [...thresholds].sort((a, b) => a - b).filter((t) => percent >= t && !alreadyCrossed.has(t));
 }
 
+/**
+ * The writer session's own token usage for one run (from its getSessionStats),
+ * plus wall-clock. The Phase 3 "measure first" signal: `input` is the writer's
+ * full-price cold-start cost, weighed against the parent context size (recorded
+ * separately, at fire time) that a `fork=true` writer would carry instead.
+ * `cacheRead` is ~0 today (no prefix reuse) and would be the fork's success
+ * signal if it were ever built.
+ */
+export interface WriterTokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+  costUsd: number;
+  durationMs: number;
+}
+
 /** Outcome of one writer run, as reported by the injected runner. */
 export interface WriterResult {
   ok: boolean;
   /** Short diagnostic, logged on failure. */
   error?: string;
+  /** Token usage + duration for profiling; absent when the runner can't report it. */
+  metrics?: WriterTokenUsage;
 }
 
 export interface WriterRequest {
@@ -145,6 +165,17 @@ export interface CheckpointDeps {
   notify?: (message: string, level?: "info" | "warning" | "error") => void;
 }
 
+/**
+ * Parent context size at checkpoint-fire time (from ctx.getContextUsage()).
+ * Captured here, not when the (possibly-queued) writer eventually runs, so the
+ * recorded number reflects the context that actually triggered this checkpoint —
+ * i.e. exactly what a `fork=true` writer would have had to carry.
+ */
+export interface ParentContext {
+  tokens: number | null;
+  contextWindow: number;
+}
+
 interface WriterJob {
   sid: string;
   pid: string;
@@ -153,6 +184,9 @@ interface WriterJob {
   delta: string;
   /** Branch message count at serialization time — becomes last_checkpoint_seq. */
   messageCount: number;
+  /** Parent context size when this checkpoint fired (for Phase 3 profiling). */
+  parentTokens: number | null;
+  parentContextWindow: number;
 }
 
 export class CheckpointManager {
@@ -192,6 +226,8 @@ export class CheckpointManager {
     cwd: string;
     percent: number | null | undefined;
     messages: unknown[];
+    /** Parent context size at this turn, recorded for Phase 3 profiling. */
+    parentContext?: ParentContext;
   }): boolean {
     if (typeof args.percent !== "number") return false;
     const set = this.crossedSet(args.sid);
@@ -203,7 +239,13 @@ export class CheckpointManager {
   }
 
   /** Serializes the delta and schedules a writer run (queue depth 1, newest wins). */
-  fireCheckpoint(args: { sid: string; pid: string; cwd: string; messages: unknown[] }): boolean {
+  fireCheckpoint(args: {
+    sid: string;
+    pid: string;
+    cwd: string;
+    messages: unknown[];
+    parentContext?: ParentContext;
+  }): boolean {
     if (this.consecutiveFailures >= this.deps.maxWriterFailures) {
       this.deps.log(
         `checkpoint: giving up (${this.consecutiveFailures} consecutive writer failures); restart pi to retry`,
@@ -227,6 +269,8 @@ export class CheckpointManager {
       cwd: args.cwd,
       delta: serializeDelta(delta),
       messageCount: args.messages.length,
+      parentTokens: args.parentContext?.tokens ?? null,
+      parentContextWindow: args.parentContext?.contextWindow ?? 0,
     };
     if (this.running) {
       // Newest wins: its delta range is a strict superset of the evicted one's.
@@ -263,6 +307,7 @@ export class CheckpointManager {
         subagentProgress: this.deps.buildSubagentProgress?.(job.sid) ?? "",
       });
       const result = await this.deps.runWriter({ prompt, cwd: job.cwd });
+      this.recordMetrics(job, result.ok, result.metrics);
       if (result.ok) {
         metaSet(db, `last_checkpoint_seq:${job.sid}`, String(job.messageCount));
         this.consecutiveFailures = 0;
@@ -277,6 +322,7 @@ export class CheckpointManager {
       }
     } catch (err) {
       this.consecutiveFailures += 1;
+      this.recordMetrics(job, false, undefined); // a run happened and failed — log it with the parent size, no usage
       this.deps.log(`checkpoint: writer error: ${String(err)}`);
     } finally {
       const next = this.pending;
@@ -288,6 +334,46 @@ export class CheckpointManager {
         for (const w of this.waiters.splice(0)) w();
       }
     }
+  }
+
+  /**
+   * Persist + log one writer run's instrumentation (SUBAGENT-INTEGRATION-PLAN
+   * §6 "measure first"). Instrumentation must never disrupt the writer flow, so
+   * every failure here is swallowed to the log. The structured log line mirrors
+   * the row so the data is greppable even if the table is later dropped.
+   */
+  private recordMetrics(job: WriterJob, ok: boolean, usage: WriterTokenUsage | undefined): void {
+    const deltaChars = job.delta.length;
+    const deltaTokensEst = Math.ceil(deltaChars / 4);
+    try {
+      recordWriterMetrics(this.deps.db, {
+        sessionId: job.sid,
+        projectId: job.pid,
+        ts: Date.now(),
+        ok,
+        input: usage?.input ?? 0,
+        output: usage?.output ?? 0,
+        cacheRead: usage?.cacheRead ?? 0,
+        cacheWrite: usage?.cacheWrite ?? 0,
+        total: usage?.total ?? 0,
+        costUsd: usage?.costUsd ?? 0,
+        deltaChars,
+        deltaTokensEst,
+        parentTokens: job.parentTokens,
+        parentContextWindow: job.parentContextWindow,
+        messageCount: job.messageCount,
+        durationMs: usage?.durationMs ?? 0,
+      });
+    } catch (err) {
+      this.deps.log(`checkpoint: failed to record writer metrics: ${String(err)}`);
+    }
+    this.deps.log(
+      `checkpoint metrics: sid=${job.sid} ok=${ok} ` +
+        `writer_input=${usage?.input ?? 0} writer_output=${usage?.output ?? 0} ` +
+        `cache_read=${usage?.cacheRead ?? 0} cache_write=${usage?.cacheWrite ?? 0} ` +
+        `cost=$${(usage?.costUsd ?? 0).toFixed(4)} delta_tok≈${deltaTokensEst} ` +
+        `parent_tokens=${job.parentTokens ?? "?"} dur_ms=${usage?.durationMs ?? 0}`,
+    );
   }
 
   /** Memory-flush nudge text for 70% / 85% levels — once per level per session. */

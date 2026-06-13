@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { CmeConfig } from "./config.ts";
-import { metaGet } from "./db.ts";
+import { metaGet, writerMetricsSummary } from "./db.ts";
 import type { FooterCounts } from "./footer-counts.ts";
 import { memorySearch } from "./fts.ts";
 import {
@@ -120,6 +120,53 @@ function statusText(deps: CommandDeps, cwd: string, sid: string): string {
   return lines.join("\n");
 }
 
+/**
+ * The Phase 3 "measure first" readout (SUBAGENT-INTEGRATION-PLAN §6): turns the
+ * recorded writer_metrics rows into the build-vs-skip verdict the plan's
+ * precondition asks for. The comparison is conservative — it pits the parent
+ * context billed at the ~10% cache-read rate (a fork's impossible-best case,
+ * every checkpoint a warm hit) against what the writer pays in full-price input
+ * today. If even that best case loses, the fork is not worth building.
+ */
+export function metricsText(deps: CommandDeps, cwd: string): string {
+  const pid = projectId(cwd);
+  const proj = writerMetricsSummary(deps.db, { projectId: pid });
+  const all = writerMetricsSummary(deps.db);
+  if (all.n === 0) {
+    return [
+      'mimo-cme writer metrics (Phase 3 "measure first")',
+      "",
+      "no checkpoint-writer runs recorded yet. Run a session past a context",
+      "threshold (20/40/60/80%) so the in-process writer fires, then re-run",
+      "/memory metrics to see its cost vs. what a fork=true writer would carry.",
+    ].join("\n");
+  }
+  const fmt = (n: number) => Math.round(n).toLocaleString();
+  const parent = proj.avgParentTokens;
+  const forkBestCase = parent == null ? null : parent * 0.1; // cache-read ≈ 10% of input price
+  const verdict =
+    parent == null
+      ? "no parent-context sizes captured — cannot compare against a fork"
+      : forkBestCase! > proj.avgInput
+        ? `fork LOSES even best case: ~${fmt(forkBestCase!)} cache-read tok/run > ${fmt(proj.avgInput)} full-price input now → Phase 3 not worth building`
+        : `fork MIGHT help: best case ~${fmt(forkBestCase!)} cache-read tok/run < ${fmt(proj.avgInput)} full-price input now → worth deeper measurement`;
+  return [
+    'mimo-cme writer metrics (Phase 3 "measure first")',
+    "",
+    `this project (${pid}): ${proj.n} run(s), ${proj.okCount} ok`,
+    `  writer tokens/run:   input≈${fmt(proj.avgInput)}  output≈${fmt(proj.avgOutput)}  total≈${fmt(proj.avgTotal)}`,
+    `  cache tokens/run:    read≈${fmt(proj.avgCacheRead)}  write≈${fmt(proj.avgCacheWrite)}   (read≈0 = no prefix reuse today)`,
+    `  cost/run:            $${proj.avgCostUsd.toFixed(4)}`,
+    `  delta fed/run:       ≈${fmt(proj.avgDeltaTokensEst)} tok`,
+    `  parent ctx at fire:  ${parent == null ? "n/a" : "≈" + fmt(parent) + " tok"}   (what a fork=true writer would carry)`,
+    `  wall-clock/run:      ${fmt(proj.avgDurationMs)} ms`,
+    "",
+    `verdict: ${verdict}`,
+    "",
+    `all projects: ${all.n} run(s) · writer input≈${fmt(all.avgInput)} tok · parent≈${all.avgParentTokens == null ? "n/a" : fmt(all.avgParentTokens) + " tok"}`,
+  ].join("\n");
+}
+
 export function buildDreamPrompt(deps: CommandDeps, cwd: string): string {
   const pid = projectId(cwd);
   return dreamPrompt({
@@ -189,15 +236,19 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   });
 
   pi.registerCommand("memory", {
-    description: "mimo-cme: status | search <query> | dream | distill",
+    description: "mimo-cme: status | search <query> | metrics | dream | distill",
     getArgumentCompletions: (prefix) =>
-      ["status", "search", "dream", "distill"]
+      ["status", "search", "metrics", "dream", "distill"]
         .filter((s) => s.startsWith(prefix))
         .map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       if (trimmed === "dream") {
         sendManualPass(ctx, buildDreamPrompt(deps, ctx.cwd), "dream");
+        return;
+      }
+      if (trimmed === "metrics") {
+        showReadout(ctx, "mimo-cme:metrics", metricsText(deps, ctx.cwd));
         return;
       }
       if (trimmed === "distill") {

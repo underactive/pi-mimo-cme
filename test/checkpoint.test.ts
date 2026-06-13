@@ -183,6 +183,89 @@ test("CheckpointManager: omits subagent progress when no builder is wired (rende
   fs.rmSync(agent, { recursive: true, force: true });
 });
 
+test("CheckpointManager: records writer token usage + parent context per run", async () => {
+  const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpm-"));
+  const root = path.join(agent, "pi-mimo-cme");
+  const db = openDb(":memory:");
+  const manager = new CheckpointManager({
+    db,
+    root,
+    thresholds: [20],
+    maxWriterFailures: 3,
+    log: () => {},
+    runWriter: async () =>
+      ({
+        ok: true,
+        metrics: {
+          input: 1200,
+          output: 300,
+          cacheRead: 0,
+          cacheWrite: 1200,
+          total: 2700,
+          costUsd: 0.012,
+          durationMs: 1500,
+        },
+      }) satisfies WriterResult,
+  });
+  manager.fireCheckpoint({
+    sid: "s1",
+    pid: "p1",
+    cwd: "/w",
+    messages: [{ role: "user", content: "hello world" }],
+    parentContext: { tokens: 84_000, contextWindow: 200_000 },
+  });
+  await manager.waitForIdle(1000);
+
+  const row = db.prepare("SELECT * FROM writer_metrics WHERE session_id = 's1'").get() as Record<
+    string,
+    number
+  >;
+  assert.equal(row["ok"], 1);
+  assert.equal(row["writer_input"], 1200);
+  assert.equal(row["cache_read"], 0); // no prefix reuse today — the Phase 3 acceptance signal
+  assert.equal(row["cache_write"], 1200);
+  assert.equal(row["writer_total"], 2700);
+  assert.equal(row["parent_tokens"], 84_000); // what a fork=true writer would have carried
+  assert.equal(row["parent_context_window"], 200_000);
+  assert.equal(row["message_count"], 1);
+  assert.equal(row["duration_ms"], 1500);
+  assert.ok(row["delta_chars"]! > 0, "delta was serialized + measured");
+  assert.equal(row["delta_tokens_est"], Math.ceil(row["delta_chars"]! / 4));
+  db.close();
+  fs.rmSync(agent, { recursive: true, force: true });
+});
+
+test("CheckpointManager: records a metrics row even when the writer reports failure", async () => {
+  const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpmf-"));
+  const root = path.join(agent, "pi-mimo-cme");
+  const db = openDb(":memory:");
+  const manager = new CheckpointManager({
+    db,
+    root,
+    thresholds: [20],
+    maxWriterFailures: 3,
+    log: () => {},
+    runWriter: async () => ({ ok: false, error: "boom" }),
+  });
+  manager.fireCheckpoint({
+    sid: "s1",
+    pid: "p1",
+    cwd: "/w",
+    messages: [{ role: "user", content: "x" }],
+    parentContext: { tokens: 50_000, contextWindow: 200_000 },
+  });
+  await manager.waitForIdle(1000);
+
+  const row = db
+    .prepare("SELECT ok, writer_input, parent_tokens FROM writer_metrics")
+    .get() as Record<string, number>;
+  assert.equal(row["ok"], 0);
+  assert.equal(row["writer_input"], 0); // no usage reported on failure
+  assert.equal(row["parent_tokens"], 50_000); // parent size is still captured
+  db.close();
+  fs.rmSync(agent, { recursive: true, force: true });
+});
+
 test("CheckpointManager: gives up after max consecutive writer failures", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpf-"));
   const root = path.join(agent, "pi-mimo-cme");

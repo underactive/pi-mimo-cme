@@ -161,9 +161,19 @@ Deliberate adaptations, in roughly decreasing order of consequence:
    reuse: the writer is still a separate conversation with its own system prompt and tool
    schema, so its token prefix can't match the parent's. True reuse would require forking
    the parent's full prefix + tool schema (MiMoCode's `fork=true`), which even MiMoCode
-   leaves off by default — so the delta remains a condensed text handoff (tool I/O clipped
-   to 500 chars, whole delta capped at ~100KB, newest kept). Dream/distill still run as
-   subprocesses (long-running, fire-and-forget, process-isolated).
+   leaves off by default. An SDK investigation found `fork=true` is not merely neutral
+   here but a likely **regression**: the deep (conversation) cache breakpoint can't be hit
+   unless the writer carries the parent's *full* tool schema — which includes this
+   extension's own tools and would therefore re-bind it (the recursion Phase 1 removed) —
+   and even granted a hit, the writer would carry the entire parent context (tens-to-
+   hundreds of K tokens) every checkpoint instead of a small delta, on top of date/cwd/TTL/
+   auth-mode cache-bust vectors. Per the plan's own gate (*"only if profiling shows the
+   writer's cold-start cost actually matters"*), the writer is now **instrumented**: each
+   run records its token usage against the parent context size into a `writer_metrics`
+   table, surfaced by **`/memory metrics`** with a build-vs-skip verdict — so the delta-vs-
+   fork call is made from data, not theory. The delta thus remains a condensed text handoff
+   (tool I/O clipped to 500 chars, whole delta capped at ~100KB, newest kept). Dream/distill
+   still run as subprocesses (long-running, fire-and-forget, process-isolated).
 6. **Actor (subagent) ledger, but no user task graph.** When `@tintinweb/pi-subagents`
    is loaded, the extension observes its lifecycle events over `pi.events` — a soft,
    optional dependency: no `import`, no spawn RPC, purely serializable event payloads —

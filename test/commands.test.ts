@@ -3,12 +3,35 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import { reconcileAndNotify, type CommandDeps } from "../src/commands.ts";
+import { metricsText, reconcileAndNotify, type CommandDeps } from "../src/commands.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
-import { openDb } from "../src/db.ts";
+import { openDb, recordWriterMetrics, type WriterMetricsRow } from "../src/db.ts";
+import { projectId } from "../src/paths.ts";
 
 function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cmd-"));
+}
+
+function metricsRow(pid: string, over: Partial<WriterMetricsRow>): WriterMetricsRow {
+  return {
+    sessionId: "s",
+    projectId: pid,
+    ts: 1,
+    ok: true,
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 0,
+    costUsd: 0,
+    deltaChars: 0,
+    deltaTokensEst: 0,
+    parentTokens: null,
+    parentContextWindow: 0,
+    messageCount: 0,
+    durationMs: 0,
+    ...over,
+  };
 }
 
 function write(root: string, rel: string, body: string): void {
@@ -39,6 +62,40 @@ test("reconcileAndNotify debounces the tree walk within a session", () => {
   config.checkpoint.reconcileDebounceMs = 0;
   reconcileAndNotify(deps);
   assert.equal(count(), 2, "window=0 disables debounce → new file indexed");
+
+  db.close();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("metricsText: empty readout, then the fork-LOSES verdict when parent ctx dwarfs writer input", () => {
+  const root = tempRoot();
+  const cwd = "/some/project/dir";
+  const pid = projectId(cwd);
+  const db = openDb(":memory:");
+  const deps: CommandDeps = { db, root, config: structuredClone(DEFAULT_CONFIG) };
+
+  assert.match(metricsText(deps, cwd), /no checkpoint-writer runs recorded yet/);
+
+  // parent*0.1 (=10,000) > full-price writer input (1,000) → fork loses even best case.
+  recordWriterMetrics(db, metricsRow(pid, { input: 1000, parentTokens: 100_000 }));
+  const loses = metricsText(deps, cwd);
+  assert.match(loses, /fork LOSES even best case/);
+  assert.match(loses, /not worth building/);
+
+  db.close();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("metricsText: fork-MIGHT-help verdict when the parent context is small", () => {
+  const root = tempRoot();
+  const cwd = "/tiny/ctx/project";
+  const pid = projectId(cwd);
+  const db = openDb(":memory:");
+  const deps: CommandDeps = { db, root, config: structuredClone(DEFAULT_CONFIG) };
+
+  // parent*0.1 (=5,000) < full-price writer input (10,000) → worth deeper measurement.
+  recordWriterMetrics(db, metricsRow(pid, { input: 10_000, parentTokens: 50_000 }));
+  assert.match(metricsText(deps, cwd), /fork MIGHT help/);
 
   db.close();
   fs.rmSync(root, { recursive: true, force: true });

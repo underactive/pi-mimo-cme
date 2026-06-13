@@ -327,6 +327,39 @@ to `(no task registry)`, and nothing breaks.
   that seeds the writer session with the parent's exact prefix + tool schema (MiMo parity).
   Only if profiling shows the writer's cold-start token cost actually matters.
 
+  **STATUS (2026-06-13): "measure first" prerequisite SHIPPED; the fork itself remains
+  unbuilt — and an SDK investigation argues it should stay that way.** Two findings drove
+  this:
+
+  1. **Feasibility (SDK archaeology).** A real provider cache-READ for the writer is
+     *POSSIBLE-BUT-FRAGILE → effectively blocked*. The deep (conversation-level) Anthropic
+     cache breakpoint includes the **tools block**, so a hit requires the writer to send a
+     byte-identical tool schema — i.e. the parent's *full* tool set, which includes
+     **this extension's own** memory/history tools. Reproducing those under the writer's
+     `noExtensions` loader is impossible without re-binding the extension to the writer
+     session — exactly the recursion Phase 1 eliminated. Add the live `Current date:` /
+     `Current working directory:` suffix baked into every system prompt (`system-prompt.js`),
+     OAuth-vs-API-key tool-name casing, and the 5-min cache TTL, and the byte-match is
+     unreachable in the general case. Even if forced, the writer would carry the **entire**
+     parent context (tens-to-hundreds of K tokens) as input every checkpoint vs. today's
+     small condensed delta — a likely **net cost regression**, not a win.
+  2. **Decision gated on data, not theory.** Rather than build or kill on the above alone,
+     the writer is now **instrumented** (the gate the plan itself names). Each run records,
+     into a `writer_metrics` table (DB `SCHEMA_V3`): its own token usage
+     (`input/output/cacheRead/cacheWrite/total/cost`, from the writer session's
+     `getSessionStats()`), the condensed delta size it received, and the **parent context
+     size at fire time** (`ctx.getContextUsage().tokens` — what a `fork=true` writer would
+     have to carry). `/memory metrics` aggregates these and prints a build-vs-skip verdict:
+     it pits the parent context billed at the ~10% cache-read rate (a fork's impossible-best
+     case) against the writer's full-price input today; if even that best case loses, the
+     fork is not worth building. `cacheRead` here doubles as the fork's acceptance signal —
+     ~0 today (no reuse); a working fork would make it > 0.
+
+  **Next step:** run real sessions past the 20/40/60/80% thresholds, then `/memory metrics`.
+  Build the `checkpoint.fork` flag only if the data overturns finding #1 (it is not expected
+  to). Wiring already in place to make that cheap: `WriterResult.metrics`, the parent-context
+  capture in `CheckpointManager`, and the per-run row.
+
 Tests: extend `checkpoint.test.ts` for the in-memory writer path (mock `createAgentSession`),
 add an actor-ledger test, a `progress`-type regex test in `paths.test.ts`, and a path-guard
 case allowing `tasks/<id>/` for the writer and denying it for the main agent.

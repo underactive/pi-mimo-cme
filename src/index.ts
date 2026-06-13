@@ -17,7 +17,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { ActorLedger, buildSubagentProgress, type ActorEvent, type ActorPhase } from "./actors.ts";
-import { CheckpointManager, type WriterFn } from "./checkpoint.ts";
+import { CheckpointManager, type WriterFn, type WriterTokenUsage } from "./checkpoint.ts";
 import {
   buildDistillPrompt,
   buildDreamPrompt,
@@ -149,6 +149,9 @@ export default function piMimoCme(pi: ExtensionAPI) {
     const dir = agentDir();
     let session: AgentSession | undefined;
     try {
+      // Full in-process pass wall-clock (loader + session build + prompt) — the
+      // "cold-start" cost SUBAGENT-INTEGRATION-PLAN §6 says to measure before fork.
+      const t0 = Date.now();
       const loader = new DefaultResourceLoader({
         cwd,
         agentDir: dir,
@@ -170,6 +173,26 @@ export default function piMimoCme(pi: ExtensionAPI) {
       });
       session = created.session;
       await session.prompt(prompt);
+      // Writer's own token cost for this run. The session is single-use (one
+      // prompt, possibly several internal read/edit turns), so getSessionStats
+      // IS the per-checkpoint cost — no before/after diff needed. Best-effort:
+      // stats are profiling, never a reason to fail a checkpoint.
+      const durationMs = Date.now() - t0;
+      let metrics: WriterTokenUsage | undefined;
+      try {
+        const { tokens, cost } = session.getSessionStats();
+        metrics = {
+          input: tokens.input,
+          output: tokens.output,
+          cacheRead: tokens.cacheRead,
+          cacheWrite: tokens.cacheWrite,
+          total: tokens.total,
+          costUsd: cost,
+          durationMs,
+        };
+      } catch {
+        /* stats unavailable — leave metrics undefined */
+      }
       // Mirror print-mode's success check: inspect the final assistant message.
       const messages = session.state.messages as ReadonlyArray<{
         role?: string;
@@ -178,9 +201,9 @@ export default function piMimoCme(pi: ExtensionAPI) {
       }>;
       const last = messages[messages.length - 1];
       if (last?.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted")) {
-        return { ok: false, error: last.errorMessage ?? `writer stopped: ${last.stopReason}` };
+        return { ok: false, error: last.errorMessage ?? `writer stopped: ${last.stopReason}`, metrics };
       }
-      return { ok: true };
+      return { ok: true, metrics };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? (err.stack ?? err.message) : String(err) };
     } finally {
@@ -490,12 +513,14 @@ export default function piMimoCme(pi: ExtensionAPI) {
   pi.on(
     "turn_end",
     safe("turn_end", (_event, ctx) => {
+      const usage = ctx.getContextUsage(); // one read: drives both the threshold and the profiling row
       checkpoints.maybeCheckpoint({
         sid: sidOf(ctx),
         pid: projectId(ctx.cwd),
         cwd: ctx.cwd,
-        percent: ctx.getContextUsage()?.percent,
+        percent: usage?.percent,
         messages: branchMessages(ctx),
+        parentContext: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow } : undefined,
       });
       refreshStatus(ctx); // backstop: also picks up idx changes from in-turn memory searches
     }),
@@ -505,11 +530,13 @@ export default function piMimoCme(pi: ExtensionAPI) {
   pi.on(
     "session_before_compact",
     safe("session_before_compact", async (_event, ctx) => {
+      const usage = ctx.getContextUsage();
       checkpoints.fireCheckpoint({
         sid: sidOf(ctx),
         pid: projectId(ctx.cwd),
         cwd: ctx.cwd,
         messages: branchMessages(ctx),
+        parentContext: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow } : undefined,
       });
       await checkpoints.waitForIdle(60_000);
     }),
