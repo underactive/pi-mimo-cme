@@ -100,6 +100,27 @@ export default function piMimoCme(pi: ExtensionAPI) {
       .filter((e) => e.type === "message")
       .map((e) => (e as { message: unknown }).message);
 
+  /**
+   * Live footer: `🧠 mem · <idx> idx · <hist> hist`.
+   *   idx  = rows in memory_fts  — every indexed memory layer (global/project/
+   *          session markdown); the agent's recallable knowledge, global.
+   *   hist = rows in history_fts for THIS project — the layer-4 capture.
+   * memory_fts is small and history_fts is project-indexed, so the two
+   * COUNT(*)s are cheap enough to run per message/turn. No-op without a UI
+   * (-p / json modes). Reusing the "mimo-cme" key overwrites the footer in
+   * place, which is what makes it update live rather than stacking entries.
+   */
+  function refreshStatus(ctx: ExtensionContext): void {
+    if (!ctx.hasUI) return;
+    const idx = (db.prepare("SELECT COUNT(*) AS n FROM memory_fts").get() as { n: number }).n;
+    const hist = (
+      db.prepare("SELECT COUNT(*) AS n FROM history_fts WHERE project_id = ?").get(projectId(ctx.cwd)) as {
+        n: number;
+      }
+    ).n;
+    ctx.ui.setStatus("mimo-cme", `🧠 mem · ${idx} idx · ${hist} hist`);
+  }
+
   function maybeAutoPass(ctx: ExtensionContext, pass: "dream" | "distill"): void {
     const cfg = config[pass];
     if (!cfg.auto) return;
@@ -158,6 +179,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
             sidOf(ctx),
           );
           if (stats.files > 0) log(`backfill: ${stats.rows} rows from ${stats.files} session files`);
+          if (stats.rows > 0) refreshStatus(ctx); // backfill grew hist — update footer
         } catch (err) {
           reportError("backfill", err);
         }
@@ -169,10 +191,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
         maybeAutoPass(ctx, "distill");
       }
 
-      if (ctx.hasUI) {
-        const { n } = db.prepare("SELECT COUNT(*) AS n FROM memory_fts").get() as { n: number };
-        ctx.ui.setStatus("mimo-cme", `🧠 ${n} memories`);
-      }
+      refreshStatus(ctx); // initial footer (backfill above refreshes again once it lands)
     }),
   );
 
@@ -219,7 +238,8 @@ export default function piMimoCme(pi: ExtensionAPI) {
   pi.on(
     "message_end",
     safe("message_end", (event, ctx) => {
-      indexer.indexMessage(sidOf(ctx), projectId(ctx.cwd), event.message);
+      const added = indexer.indexMessage(sidOf(ctx), projectId(ctx.cwd), event.message);
+      if (added > 0) refreshStatus(ctx); // hist ticked up — update footer live
     }),
   );
 
@@ -234,6 +254,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
         percent: ctx.getContextUsage()?.percent,
         messages: branchMessages(ctx),
       });
+      refreshStatus(ctx); // backstop: also picks up idx changes from in-turn memory searches
     }),
   );
 
