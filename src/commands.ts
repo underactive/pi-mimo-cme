@@ -3,7 +3,7 @@
  */
 import * as fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { CmeConfig } from "./config.ts";
 import { metaGet } from "./db.ts";
 import { memorySearch } from "./fts.ts";
@@ -29,14 +29,37 @@ export interface CommandDeps {
 }
 
 /**
+ * Per-session debounce clock for search-triggered reconcile, keyed by DB handle.
+ * A WeakMap (not a module `let`) is deliberate: each session opens its own
+ * DatabaseSync, so the key differs per session — the clock physically cannot be
+ * mis-shared across concurrent sessions, and it's GC'd when the handle closes.
+ * In-memory (not persisted in `meta`) so the first search of every session
+ * always reconciles; only rapid repeat searches within a session are skipped.
+ */
+const lastReconcileAt = new WeakMap<DatabaseSync, number>();
+
+/**
  * Reconcile, then surface "🔄 Memory indexed" only when rows actually changed.
  * Shared by the /memory search command and the memory tool (ToolDeps is
  * structurally identical to CommandDeps). Reconcile reports a non-zero diff
  * only when a file's size-mtime fingerprint changed since last index, so the
  * toast is naturally rare — repeat searches over an unchanged tree stay quiet.
+ *
+ * The full tree walk is synchronous and grows with session count, so it is
+ * debounced: if a reconcile ran < reconcileDebounceMs ago this session, skip the
+ * walk entirely (the agent is told to search memory FIRST and may fire several
+ * searches per turn — without this each one re-walks the whole tree on the
+ * interactive event loop). The clock starts on completion, so a burst collapses
+ * to one walk; a window of 0 disables debouncing.
  */
 export function reconcileAndNotify(deps: CommandDeps): void {
+  const windowMs = deps.config.checkpoint.reconcileDebounceMs;
+  if (windowMs > 0) {
+    const last = lastReconcileAt.get(deps.db);
+    if (last !== undefined && Date.now() - last < windowMs) return; // reconciled this session very recently — stay off the hot path
+  }
   const stats = reconcile(deps.db, { root: deps.root, ccIndex: deps.config.memory.ccIndex });
+  lastReconcileAt.set(deps.db, Date.now());
   if (stats.indexed === 0 && stats.removed === 0) return; // nothing changed on disk — stay quiet
   const parts = [`${stats.indexed} indexed`];
   if (stats.removed > 0) parts.push(`${stats.removed} removed`);
@@ -106,18 +129,31 @@ export function buildDistillPrompt(deps: CommandDeps, cwd: string): string {
 
 export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   // Manual evolution passes run in the CURRENT session: the user intentionally
-  // started them and is watching (MiMoCode's /dream is the same).
+  // started them and is watching (MiMoCode's /dream is the same). pi.sendUserMessage
+  // THROWS when the agent is streaming unless a deliverAs is given, and pi lets
+  // commands be entered mid-turn — so guard on ctx.isIdle() and queue as a follow-up
+  // (runs after the current turn, same session) rather than steer (which would
+  // interrupt the user's in-flight request). See examples/extensions/send-user-message.ts.
+  const sendManualPass = (ctx: ExtensionCommandContext, prompt: string, label: string): void => {
+    if (ctx.isIdle()) {
+      pi.sendUserMessage(prompt);
+      return;
+    }
+    pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+    ctx.ui.notify(`mimo-cme: ${label} queued — runs after the current turn`, "info");
+  };
+
   pi.registerCommand("dream", {
     description: "mimo-cme: consolidate durable memory from recent sessions (manual dream pass)",
     handler: async (_args, ctx) => {
-      pi.sendUserMessage(buildDreamPrompt(deps, ctx.cwd));
+      sendManualPass(ctx, buildDreamPrompt(deps, ctx.cwd), "dream");
     },
   });
 
   pi.registerCommand("distill", {
     description: "mimo-cme: package repeated workflows into skills/commands (manual distill pass)",
     handler: async (_args, ctx) => {
-      pi.sendUserMessage(buildDistillPrompt(deps, ctx.cwd));
+      sendManualPass(ctx, buildDistillPrompt(deps, ctx.cwd), "distill");
     },
   });
 
@@ -130,11 +166,11 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       if (trimmed === "dream") {
-        pi.sendUserMessage(buildDreamPrompt(deps, ctx.cwd));
+        sendManualPass(ctx, buildDreamPrompt(deps, ctx.cwd), "dream");
         return;
       }
       if (trimmed === "distill") {
-        pi.sendUserMessage(buildDistillPrompt(deps, ctx.cwd));
+        sendManualPass(ctx, buildDistillPrompt(deps, ctx.cwd), "distill");
         return;
       }
       if (trimmed.startsWith("search")) {

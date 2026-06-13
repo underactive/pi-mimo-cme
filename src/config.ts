@@ -17,6 +17,14 @@ export interface CmeConfig {
     thresholds: number[];
     scoreFloor: number;
     reconcileOnSearch: boolean;
+    /**
+     * Debounce window (ms) for search-triggered reconcile. A full tree walk is
+     * synchronous and grows with session count, so when reconcileOnSearch fires
+     * repeatedly within one session we skip the walk if one ran < this window
+     * ago. The clock is per-session (in-memory), so the first search of every
+     * session always reconciles — only rapid repeats collapse. 0 disables.
+     */
+    reconcileDebounceMs: number;
     maxWriterFailures: number;
     pushCaps: PushCaps;
   };
@@ -31,6 +39,7 @@ export const DEFAULT_CONFIG: CmeConfig = {
     thresholds: [20, 40, 60, 80],
     scoreFloor: 0.15,
     reconcileOnSearch: true,
+    reconcileDebounceMs: 4000,
     maxWriterFailures: 3,
     pushCaps: { checkpoint: 11_000, memory: 10_000, global: 6_000, notes: 6_000, memoryKeys: 500 },
   },
@@ -58,6 +67,7 @@ export function mergeConfig(base: CmeConfig, overlay: Record<string, unknown>): 
     if (Array.isArray(c["thresholds"])) out.checkpoint.thresholds = c["thresholds"].filter((t) => typeof t === "number");
     if (typeof c["scoreFloor"] === "number") out.checkpoint.scoreFloor = c["scoreFloor"];
     if (typeof c["reconcileOnSearch"] === "boolean") out.checkpoint.reconcileOnSearch = c["reconcileOnSearch"];
+    if (typeof c["reconcileDebounceMs"] === "number") out.checkpoint.reconcileDebounceMs = c["reconcileDebounceMs"];
     if (typeof c["maxWriterFailures"] === "number") out.checkpoint.maxWriterFailures = c["maxWriterFailures"];
     if (c["pushCaps"] && typeof c["pushCaps"] === "object") {
       for (const key of Object.keys(out.checkpoint.pushCaps) as (keyof PushCaps)[]) {

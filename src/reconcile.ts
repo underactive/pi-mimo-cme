@@ -8,6 +8,16 @@ import * as path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { ccProjectsRoot, typeFromKey } from "./paths.ts";
 
+/**
+ * Cap a single file's indexed body. Curated memory files are small (the largest
+ * inject cap is ~44KB), but the cc scope indexes arbitrary
+ * ~/.claude/projects/*​/memory/*.md the user doesn't control — without a cap a
+ * runaway file would be read whole into memory and tokenized synchronously
+ * inside the reconcile transaction. 256KB leaves generous headroom for any real
+ * memory file; the tool tells the agent to Read the path for the full body.
+ */
+const MAX_INDEXED_BODY_BYTES = 256 * 1024;
+
 export interface ReconcileOptions {
   root: string;
   ccIndex?: boolean;
@@ -121,13 +131,18 @@ export function reconcile(db: DatabaseSync, opts: ReconcileOptions): ReconcileSt
     const seen = new Set<string>();
     for (const file of files) {
       seen.add(file.path);
-      let stat: fs.Stats;
+      let stat: fs.BigIntStats;
       try {
-        stat = fs.statSync(file.path);
+        // bigint stat exposes mtimeNs: on nanosecond-mtime filesystems (APFS,
+        // ext4) this detects a same-size edit that lands within the same
+        // millisecond — which a millisecond fingerprint would skip. The agent
+        // can Edit MEMORY.md in place, so same-size rewrites are realistic.
+        // Same single statSync cost; we still avoid reading unchanged bodies.
+        stat = fs.statSync(file.path, { bigint: true });
       } catch {
         continue;
       }
-      const fingerprint = `${stat.size}-${stat.mtimeMs}`;
+      const fingerprint = `${stat.size}-${stat.mtimeNs}`;
       const existing = selectFp.get(file.path) as { fingerprint: string } | undefined;
       if (existing?.fingerprint === fingerprint) continue;
       let body: string;
@@ -136,6 +151,7 @@ export function reconcile(db: DatabaseSync, opts: ReconcileOptions): ReconcileSt
       } catch {
         continue;
       }
+      if (body.length > MAX_INDEXED_BODY_BYTES) body = body.slice(0, MAX_INDEXED_BODY_BYTES);
       const type = file.scope === "cc" ? ccTypeFromFrontmatter(body) : file.type;
       upsert.run(file.path, file.scope, file.scopeId, type, body, fingerprint, Date.now());
       stats.indexed += 1;

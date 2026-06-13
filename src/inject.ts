@@ -4,7 +4,7 @@
  * after resume / fork / compaction.
  */
 import * as fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { budgetText, budgetedRead, estimateTokens } from "./budget.ts";
 import type { PushCaps } from "./config.ts";
 import {
@@ -89,6 +89,37 @@ Don't ask the user about something memory may already record.`;
 }
 
 /**
+ * Per-DB-handle state for the read path: prepared statements (node:sqlite
+ * recompiles SQL on every prepare(), and these run every turn) plus the cached
+ * appendix. Keyed by DB handle in a WeakMap, so it's per-session (one handle
+ * per session) and GC'd when the DB closes — never a cross-session singleton.
+ */
+interface InjectState {
+  keysStmt: StatementSync;
+  /** COUNT(*) + MAX(last_indexed_at) over memory_fts — the appendix cache key's index component. */
+  aggStmt: StatementSync;
+  appendix?: { key: string; value: string };
+}
+const injectState = new WeakMap<DatabaseSync, InjectState>();
+function stateFor(db: DatabaseSync): InjectState {
+  let s = injectState.get(db);
+  if (s === undefined) {
+    s = {
+      keysStmt: db.prepare(
+        `SELECT path FROM memory_fts
+         WHERE scope = 'global' OR (scope = 'sessions' AND scope_id = ?) OR (scope = 'projects' AND scope_id = ?)
+         ORDER BY path`,
+      ),
+      aggStmt: db.prepare(
+        "SELECT COUNT(*) AS n, COALESCE(MAX(last_indexed_at), 0) AS mx FROM memory_fts",
+      ),
+    };
+    injectState.set(db, s);
+  }
+  return s;
+}
+
+/**
  * Memory keys index: paths visible to this session (global ∪ this session ∪
  * this project), minus files already dumped, budgeted.
  */
@@ -97,13 +128,7 @@ export function memoryKeysIndex(
   ctx: InjectContext,
   exclude: ReadonlySet<string>,
 ): string | undefined {
-  const rows = db
-    .prepare(
-      `SELECT path FROM memory_fts
-       WHERE scope = 'global' OR (scope = 'sessions' AND scope_id = ?) OR (scope = 'projects' AND scope_id = ?)
-       ORDER BY path`,
-    )
-    .all(ctx.sid, ctx.pid) as unknown as { path: string }[];
+  const rows = stateFor(db).keysStmt.all(ctx.sid, ctx.pid) as unknown as { path: string }[];
   const paths = rows.map((r) => r.path).filter((p) => !exclude.has(p));
   if (paths.length === 0) return undefined;
   let body = "";
@@ -120,8 +145,48 @@ export function memoryKeysIndex(
   return body.trimEnd();
 }
 
-/** Per-turn system prompt appendix. Stable across turns ⇒ prompt cache stays warm. */
+/**
+ * Cache key capturing every input that can change the appendix. statSync (no
+ * read) detects edits to the two MEMORY.md files; (count, max last_indexed_at)
+ * over memory_fts detects any add/prune/reindex that the keys index would show.
+ * MAX is monotonic (reconcile stamps Date.now()), so it catches an add+prune
+ * that nets a zero count delta. Errs toward over-invalidation: an unrelated cc
+ * file change rebuilds an identical string — wasteful, never stale.
+ */
+function appendixCacheKey(state: InjectState, ctx: InjectContext): string {
+  const statKey = (p: string): string => {
+    try {
+      const s = fs.statSync(p, { bigint: true });
+      return `${s.size}-${s.mtimeNs}`;
+    } catch {
+      return "-"; // absent ⇒ section omitted; distinct from any real stat
+    }
+  };
+  const agg = state.aggStmt.get() as { n: number; mx: number };
+  return [
+    ctx.root,
+    ctx.sid,
+    ctx.pid,
+    ctx.caps.memory,
+    ctx.caps.global,
+    ctx.caps.memoryKeys,
+    statKey(projectMemoryPath(ctx.pid, ctx.root)),
+    statKey(globalMemoryPath(ctx.root)),
+    agg.n,
+    String(agg.mx),
+  ].join("|");
+}
+
+/**
+ * Per-turn system prompt appendix. Stable across turns ⇒ prompt cache stays
+ * warm; cached on the (file stats + index state) key so the synchronous file
+ * reads + keys query only re-run when memory actually changed, not every turn.
+ */
 export function buildSystemPromptAppendix(db: DatabaseSync, ctx: InjectContext): string {
+  const state = stateFor(db);
+  const key = appendixCacheKey(state, ctx);
+  if (state.appendix?.key === key) return state.appendix.value;
+
   const sections: string[] = [buildMemoryInstructions(ctx)];
   const dumped = new Set<string>();
   const projectPath = projectMemoryPath(ctx.pid, ctx.root);
@@ -140,7 +205,9 @@ export function buildSystemPromptAppendix(db: DatabaseSync, ctx: InjectContext):
   if (keys !== undefined) {
     sections.push(`## Memory keys index\n\n${keys}`);
   }
-  return sections.join("\n\n");
+  const value = sections.join("\n\n");
+  state.appendix = { key, value };
+  return value;
 }
 
 /** True when the checkpoint file has no real content beyond the template. */

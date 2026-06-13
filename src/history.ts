@@ -187,13 +187,15 @@ export function backfillProject(
   }
   for (const name of entries) {
     const file = path.join(jsonlDir, name);
-    let stat: fs.Stats;
+    let stat: fs.BigIntStats;
     try {
-      stat = fs.statSync(file);
+      // mtimeNs (bigint stat) discriminates same-size rewrites within one
+      // millisecond — see the matching note in reconcile.ts. Same syscall cost.
+      stat = fs.statSync(file, { bigint: true });
     } catch {
       continue;
     }
-    const fingerprint = `${stat.size}-${stat.mtimeMs}`;
+    const fingerprint = `${stat.size}-${stat.mtimeNs}`;
     const metaKey = `backfill:${file}`;
     if (metaGet(db, metaKey) === fingerprint) continue;
     let text: string;

@@ -244,9 +244,13 @@ export class CheckpointManager {
         deltaPath: job.deltaFile,
       });
       // /usr/bin/env wrapper sets the recursion guard; ExecOptions has no env field.
+      // --no-session: this ephemeral child only reads delta/memory files and writes
+      // markdown; without it, print mode (-p) persists a session JSONL into the same
+      // dir the layer-4 backfill scans, so the memory system would index its own
+      // checkpoint-writer transcripts as user conversation. (subagent example does the same.)
       const result = await this.deps.exec(
         "/usr/bin/env",
-        ["PI_MIMO_CME_CHILD=1", ...this.deps.piCommand, "--no-extensions", "-p", prompt],
+        ["PI_MIMO_CME_CHILD=1", ...this.deps.piCommand, "--no-extensions", "--no-session", "-p", prompt],
         { cwd: job.cwd },
       );
       if (result.code === 0) {

@@ -65,14 +65,21 @@ export default function piMimoCme(pi: ExtensionAPI) {
     if (latestCtx?.hasUI) latestCtx.ui.notify(message, level);
   };
 
-  let notifiedError = false;
+  // Surface failures as a toast, but at most once per window. Every failure is
+  // logged; the UI gets a throttled heads-up. A permanent one-shot latch would
+  // hide every later (distinct) failure for the life of the process — and since
+  // the factory runs once per process across many sessions, that could be hours
+  // — so throttle on time instead of latching forever.
+  const ERROR_NOTIFY_THROTTLE_MS = 60_000;
+  let lastErrorNotifyAt = 0;
   const reportError = (name: string, err: unknown, ctx?: ExtensionContext) => {
     log(`${name} failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
     const c = ctx ?? latestCtx; // backfill etc. pass no ctx — fall back to the live one
-    if (!notifiedError && c?.hasUI) {
-      notifiedError = true;
-      c.ui.notify("mimo-cme: a memory operation failed (see memory/logs/extension.log)", "warning");
-    }
+    if (!c?.hasUI) return;
+    const now = Date.now();
+    if (now - lastErrorNotifyAt < ERROR_NOTIFY_THROTTLE_MS) return; // warned recently; the log has the rest
+    lastErrorNotifyAt = now;
+    c.ui.notify("mimo-cme: a memory operation failed (see memory/logs/extension.log)", "warning");
   };
 
   /** SPEC §9.5: handler failures are logged, surfaced once, and swallowed. */
@@ -126,14 +133,16 @@ export default function piMimoCme(pi: ExtensionAPI) {
    * (-p / json modes). Reusing the "mimo-cme" key overwrites the footer in
    * place, which is what makes it update live rather than stacking entries.
    */
+  // Prepared once per session and reused: node:sqlite recompiles SQL on every
+  // prepare(), and these two counts fire on every message_end AND turn_end.
+  const countMemoryRows = db.prepare("SELECT COUNT(*) AS n FROM memory_fts");
+  const countProjectHistoryRows = db.prepare(
+    "SELECT COUNT(*) AS n FROM history_fts WHERE project_id = ?",
+  );
   function refreshStatus(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
-    const idx = (db.prepare("SELECT COUNT(*) AS n FROM memory_fts").get() as { n: number }).n;
-    const hist = (
-      db.prepare("SELECT COUNT(*) AS n FROM history_fts WHERE project_id = ?").get(projectId(ctx.cwd)) as {
-        n: number;
-      }
-    ).n;
+    const idx = (countMemoryRows.get() as { n: number }).n;
+    const hist = (countProjectHistoryRows.get(projectId(ctx.cwd)) as { n: number }).n;
     ctx.ui.setStatus("mimo-cme", `🧠 mem · ${idx} idx · ${hist} hist`);
   }
 
@@ -185,7 +194,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
    * memory-index diff (reconcile picks up its markdown edits); a distill's is
    * the set of asset files that newly exist. No prose parsing.
    */
-  function reportPassResult(ctx: ExtensionContext, pass: "dream" | "distill", before: Set<string> | undefined): void {
+  function reportPassResult(cwd: string, pass: "dream" | "distill", before: Set<string> | undefined): void {
     if (pass === "dream") {
       const stats = reconcile(db, { root, ccIndex: config.memory.ccIndex });
       if (stats.indexed === 0 && stats.removed === 0) {
@@ -195,12 +204,13 @@ export default function piMimoCme(pi: ExtensionAPI) {
         if (stats.removed > 0) parts.push(`${stats.removed} pruned`);
         if (stats.globalIndexed > 0) parts.push(`${stats.globalIndexed} to global`);
         notify(`🧠 mimo-cme: dream — ${parts.join(", ")}`);
-        refreshStatus(ctx); // reconcile changed memory_fts — keep the footer live
+        if (latestCtx) refreshStatus(latestCtx); // refresh the LIVE footer (spawn-time ctx may be stale post-await)
       }
       return;
     }
-    // distill
-    const created = [...assetSnapshot(ctx.cwd)].filter((p) => !(before?.has(p) ?? false));
+    // distill: diff against the spawn-time snapshot, so use the captured cwd (a
+    // plain string) — never a post-await ctx, which pi may have invalidated.
+    const created = [...assetSnapshot(cwd)].filter((p) => !(before?.has(p) ?? false));
     if (created.length === 0) {
       notify("✨ mimo-cme: distill complete — nothing worth packaging");
     } else if (created.length === 1) {
@@ -235,25 +245,41 @@ export default function piMimoCme(pi: ExtensionAPI) {
         ? "🌙 mimo-cme: dream consolidation running in background"
         : "📦 mimo-cme: distill pass running in background",
     );
+    // Capture cwd as a plain string at spawn: the .then runs after an await, and
+    // pi invalidates a captured ctx once the user switches/forks the session
+    // (runner.js invalidate()). Post-await work must never touch ctx — use this
+    // string for project identity and the live notify shim for UI.
+    const cwd = ctx.cwd;
     // Distill writes outside the memory tree, so capture the asset set NOW to
     // diff against once the child exits (dream's effect is read from the index
     // instead, so it needs no before-snapshot).
-    const before = pass === "distill" ? assetSnapshot(ctx.cwd) : undefined;
+    const before = pass === "distill" ? assetSnapshot(cwd) : undefined;
     const logName = path.join(logsDir(root), `${pass}-${Date.now()}.log`);
+    // The child queries the DB read-only via `sqlite3` (see dream/distill prompts).
+    // Flush committed WAL frames into the main file first so the child's readonly
+    // snapshot includes this session's history/memory writes; TRUNCATE also keeps
+    // the WAL bounded across a long-lived parent session.
+    try {
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch (err) {
+      log(`${pass}: wal_checkpoint before spawn failed (continuing): ${String(err)}`);
+    }
+    // --no-session: ephemeral child, must not persist a session JSONL into the dir
+    // the layer-4 backfill scans (else the memory system indexes its own transcripts).
     void pi
       .exec(
         "/usr/bin/env",
-        ["PI_MIMO_CME_CHILD=1", ...resolvePiCommand(), "--no-extensions", "-p", prompt],
-        { cwd: ctx.cwd },
+        ["PI_MIMO_CME_CHILD=1", ...resolvePiCommand(), "--no-extensions", "--no-session", "-p", prompt],
+        { cwd },
       )
       .then((res) => {
         fs.writeFileSync(logName, `code=${res.code}\n--- stdout\n${res.stdout}\n--- stderr\n${res.stderr}\n`);
         log(`${pass}: background pass finished code=${res.code} (log: ${logName})`);
         if (res.code === 0) {
           try {
-            reportPassResult(ctx, pass, before);
+            reportPassResult(cwd, pass, before);
           } catch (err) {
-            reportError(`${pass}_report`, err, ctx);
+            reportError(`${pass}_report`, err); // no ctx: spawn-time ctx may be stale post-await — fall back to the live shim
           }
         }
       })
