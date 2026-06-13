@@ -29,6 +29,9 @@ test("reconcile indexes the tree with scope/scope_id/type and skips delta files"
 
   const stats = reconcile(db, { root });
   assert.equal(stats.indexed, 5);
+  // globalIndexed is the "promoted to global" count for the dream toast: of the
+  // five files, only global/MEMORY.md lives in the global scope.
+  assert.equal(stats.globalIndexed, 1);
   const rows = db
     .prepare("SELECT path, scope, scope_id, type FROM memory_fts ORDER BY path")
     .all() as unknown as { path: string; scope: string; scope_id: string; type: string }[];

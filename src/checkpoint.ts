@@ -114,6 +114,12 @@ export interface CheckpointDeps {
   /** argv prefix to invoke pi (e.g. [node, cli.js] or ["pi"]). */
   piCommand: string[];
   log: (message: string) => void;
+  /**
+   * Optional UI toast. The writer runs in a headless subprocess that has no
+   * UI of its own, so the "checkpoint saved" moment can only surface here, in
+   * the parent, when run() observes the child's exit code. No-op without a UI.
+   */
+  notify?: (message: string, level?: "info" | "warning" | "error") => void;
 }
 
 interface WriterJob {
@@ -252,6 +258,7 @@ export class CheckpointManager {
         }
         this.consecutiveFailures = 0;
         this.deps.log(`checkpoint: writer ok (sid=${job.sid}, messages=${job.messageCount})`);
+        this.deps.notify?.("💾 mimo-cme: checkpoint saved — session memory written");
       } else {
         this.consecutiveFailures += 1;
         this.deps.log(

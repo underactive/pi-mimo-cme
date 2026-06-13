@@ -24,7 +24,8 @@ import { metaGet, metaSet, openDb } from "./db.ts";
 import { checkMemoryWrite } from "./guard.ts";
 import { backfillProject, HistoryIndexer } from "./history.ts";
 import { buildRebuildDump, buildSystemPromptAppendix } from "./inject.ts";
-import { dbPath, logsDir, memoryRoot, projectId, sessionsJsonlDir } from "./paths.ts";
+import { agentDir, dbPath, logsDir, memoryRoot, projectId, sessionsJsonlDir } from "./paths.ts";
+import { reconcile } from "./reconcile.ts";
 import { registerHistoryTool, registerMemoryTool } from "./tools.ts";
 
 /** argv prefix to re-invoke pi for writer/dream/distill subprocesses. */
@@ -52,12 +53,25 @@ export default function piMimoCme(pi: ExtensionAPI) {
     }
   };
 
+  // The latest ctx seen by any event handler. Memory's "transformation
+  // moments" (checkpoint writer, dream/distill subprocesses) resolve
+  // asynchronously, OUTSIDE any handler's scope, and the headless children
+  // doing the work have no UI of their own — so they reach whatever UI is
+  // currently live through this shim rather than a captured-at-spawn ctx.
+  // Updated in safe() on every handler invocation; a fresh per-event ctx is
+  // fine since they all front the same live session/UI.
+  let latestCtx: ExtensionContext | undefined;
+  const notify = (message: string, level: "info" | "warning" | "error" = "info"): void => {
+    if (latestCtx?.hasUI) latestCtx.ui.notify(message, level);
+  };
+
   let notifiedError = false;
   const reportError = (name: string, err: unknown, ctx?: ExtensionContext) => {
     log(`${name} failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
-    if (!notifiedError && ctx?.hasUI) {
+    const c = ctx ?? latestCtx; // backfill etc. pass no ctx — fall back to the live one
+    if (!notifiedError && c?.hasUI) {
       notifiedError = true;
-      ctx.ui.notify("mimo-cme: a memory operation failed (see memory/logs/extension.log)", "warning");
+      c.ui.notify("mimo-cme: a memory operation failed (see memory/logs/extension.log)", "warning");
     }
   };
 
@@ -67,6 +81,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
     fn: (event: E, ctx: ExtensionContext) => Promise<R | void> | R | void,
   ): (event: E, ctx: ExtensionContext) => Promise<R | void> {
     return async (event, ctx) => {
+      latestCtx = ctx; // keep the notify shim pointed at the live UI
       try {
         return await fn(event, ctx);
       } catch (err) {
@@ -84,6 +99,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
     exec: (command, args, options) => pi.exec(command, args, options),
     piCommand: resolvePiCommand(),
     log,
+    notify,
   });
 
   let pendingRebuild = false;
@@ -121,6 +137,79 @@ export default function piMimoCme(pi: ExtensionAPI) {
     ctx.ui.setStatus("mimo-cme", `🧠 mem · ${idx} idx · ${hist} hist`);
   }
 
+  /**
+   * Absolute paths of every file under the skill/extension asset dirs (global
+   * pi agent dir + this project's .pi). Distill runs headless and may write a
+   * skill, an extension, or nothing at all ("created nothing" is a valid,
+   * expected outcome), so the only honest "what got packaged" signal is the
+   * set of files that appear between a snapshot taken before the pass and one
+   * taken after — never the agent's freeform stdout.
+   */
+  function assetSnapshot(cwd: string): Set<string> {
+    const roots = [
+      path.join(agentDir(), "skills"),
+      path.join(agentDir(), "extensions"),
+      path.join(cwd, ".pi", "skills"),
+      path.join(cwd, ".pi", "extensions"),
+    ];
+    const out = new Set<string>();
+    for (const dir of roots) {
+      let entries: string[];
+      try {
+        entries = fs.readdirSync(dir, { recursive: true }) as string[];
+      } catch {
+        continue; // dir absent — nothing to snapshot
+      }
+      for (const rel of entries) {
+        const full = path.join(dir, rel);
+        try {
+          if (fs.statSync(full).isFile()) out.add(full);
+        } catch {
+          /* race / broken symlink — skip */
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Human label for a new asset: the skill dir name for a SKILL.md, else basename. */
+  function assetLabel(p: string): string {
+    const base = path.basename(p);
+    if (/^skill\.md$/i.test(base)) return path.basename(path.dirname(p));
+    return base;
+  }
+
+  /**
+   * After an auto dream/distill subprocess exits cleanly, re-derive what it
+   * changed and surface it. Honest by construction: a dream's effect is the
+   * memory-index diff (reconcile picks up its markdown edits); a distill's is
+   * the set of asset files that newly exist. No prose parsing.
+   */
+  function reportPassResult(ctx: ExtensionContext, pass: "dream" | "distill", before: Set<string> | undefined): void {
+    if (pass === "dream") {
+      const stats = reconcile(db, { root, ccIndex: config.memory.ccIndex });
+      if (stats.indexed === 0 && stats.removed === 0) {
+        notify("🧠 mimo-cme: dream complete — no memory changes");
+      } else {
+        const parts = [`${stats.indexed} consolidated`];
+        if (stats.removed > 0) parts.push(`${stats.removed} pruned`);
+        if (stats.globalIndexed > 0) parts.push(`${stats.globalIndexed} to global`);
+        notify(`🧠 mimo-cme: dream — ${parts.join(", ")}`);
+        refreshStatus(ctx); // reconcile changed memory_fts — keep the footer live
+      }
+      return;
+    }
+    // distill
+    const created = [...assetSnapshot(ctx.cwd)].filter((p) => !(before?.has(p) ?? false));
+    if (created.length === 0) {
+      notify("✨ mimo-cme: distill complete — nothing worth packaging");
+    } else if (created.length === 1) {
+      notify(`✨ mimo-cme: distilled — packaged ${assetLabel(created[0]!)}`);
+    } else {
+      notify(`✨ mimo-cme: distilled — packaged ${created.length} assets (${assetLabel(created[0]!)}, …)`);
+    }
+  }
+
   function maybeAutoPass(ctx: ExtensionContext, pass: "dream" | "distill"): void {
     const cfg = config[pass];
     if (!cfg.auto) return;
@@ -139,16 +228,17 @@ export default function piMimoCme(pi: ExtensionAPI) {
     }
     if (Date.now() - Number(last) < cfg.intervalDays * 86_400_000) return;
     metaSet(db, metaKey, String(Date.now()));
-    const deps: CommandDeps = { db, root, config };
+    const deps: CommandDeps = { db, root, config, notify };
     const prompt = pass === "dream" ? buildDreamPrompt(deps, ctx.cwd) : buildDistillPrompt(deps, ctx.cwd);
-    if (ctx.hasUI) {
-      ctx.ui.notify(
-        pass === "dream"
-          ? "🌙 mimo-cme: dream consolidation running in background"
-          : "📦 mimo-cme: distill pass running in background",
-        "info",
-      );
-    }
+    notify(
+      pass === "dream"
+        ? "🌙 mimo-cme: dream consolidation running in background"
+        : "📦 mimo-cme: distill pass running in background",
+    );
+    // Distill writes outside the memory tree, so capture the asset set NOW to
+    // diff against once the child exits (dream's effect is read from the index
+    // instead, so it needs no before-snapshot).
+    const before = pass === "distill" ? assetSnapshot(ctx.cwd) : undefined;
     const logName = path.join(logsDir(root), `${pass}-${Date.now()}.log`);
     void pi
       .exec(
@@ -159,6 +249,13 @@ export default function piMimoCme(pi: ExtensionAPI) {
       .then((res) => {
         fs.writeFileSync(logName, `code=${res.code}\n--- stdout\n${res.stdout}\n--- stderr\n${res.stderr}\n`);
         log(`${pass}: background pass finished code=${res.code} (log: ${logName})`);
+        if (res.code === 0) {
+          try {
+            reportPassResult(ctx, pass, before);
+          } catch (err) {
+            reportError(`${pass}_report`, err, ctx);
+          }
+        }
       })
       .catch((err) => log(`${pass}: background pass failed to spawn: ${String(err)}`));
   }
@@ -290,7 +387,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
     }),
   );
 
-  registerMemoryTool(pi, { db, root, config });
-  registerHistoryTool(pi, { db, root, config });
-  registerCommands(pi, { db, root, config });
+  registerMemoryTool(pi, { db, root, config, notify });
+  registerHistoryTool(pi, { db, root, config, notify });
+  registerCommands(pi, { db, root, config, notify });
 }

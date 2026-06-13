@@ -14,13 +14,15 @@ import {
   type MemoryHit,
 } from "./fts.ts";
 import { projectId } from "./paths.ts";
-import { reconcile } from "./reconcile.ts";
+import { reconcileAndNotify } from "./commands.ts";
 import { ALL_HISTORY_KINDS } from "./history.ts";
 
 export interface ToolDeps {
   db: DatabaseSync;
   root: string;
   config: CmeConfig;
+  /** UI toast, no-op without a UI (see index.ts notify shim). */
+  notify?: (message: string, level?: "info" | "warning" | "error") => void;
 }
 
 function formatMemoryHits(hits: MemoryHit[], root: string): string {
@@ -77,7 +79,7 @@ export function registerMemoryTool(pi: ExtensionAPI, deps: ToolDeps): void {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       if (deps.config.checkpoint.reconcileOnSearch) {
-        reconcile(deps.db, { root: deps.root, ccIndex: deps.config.memory.ccIndex });
+        reconcileAndNotify(deps);
       }
       const hits = memorySearch(deps.db, {
         query: params.query,

@@ -18,6 +18,13 @@ export interface ReconcileOptions {
 export interface ReconcileStats {
   indexed: number;
   removed: number;
+  /**
+   * Subset of `indexed` whose scope is "global" — the honest "promoted to
+   * global" count for the dream notification. Files are the source of truth,
+   * so the truthful way to report what a dream did is to re-derive the index
+   * diff (this), not to parse the dream agent's freeform prose summary.
+   */
+  globalIndexed: number;
 }
 
 interface WalkedFile {
@@ -99,7 +106,7 @@ function walkMemoryTree(opts: ReconcileOptions): WalkedFile[] {
 
 export function reconcile(db: DatabaseSync, opts: ReconcileOptions): ReconcileStats {
   const files = walkMemoryTree(opts);
-  const stats: ReconcileStats = { indexed: 0, removed: 0 };
+  const stats: ReconcileStats = { indexed: 0, removed: 0, globalIndexed: 0 };
   const selectFp = db.prepare("SELECT fingerprint FROM memory_fts WHERE path = ?");
   const upsert = db.prepare(
     `INSERT INTO memory_fts (path, scope, scope_id, type, body, fingerprint, last_indexed_at)
@@ -132,6 +139,7 @@ export function reconcile(db: DatabaseSync, opts: ReconcileOptions): ReconcileSt
       const type = file.scope === "cc" ? ccTypeFromFrontmatter(body) : file.type;
       upsert.run(file.path, file.scope, file.scopeId, type, body, fingerprint, Date.now());
       stats.indexed += 1;
+      if (file.scope === "global") stats.globalIndexed += 1;
     }
     // Prune rows whose file vanished (covers walked scopes and toggled-off cc).
     const allRows = db.prepare("SELECT id, path FROM memory_fts").all() as unknown as {

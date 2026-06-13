@@ -24,6 +24,23 @@ export interface CommandDeps {
   db: DatabaseSync;
   root: string;
   config: CmeConfig;
+  /** UI toast, no-op without a UI (see index.ts notify shim). */
+  notify?: (message: string, level?: "info" | "warning" | "error") => void;
+}
+
+/**
+ * Reconcile, then surface "🔄 Memory indexed" only when rows actually changed.
+ * Shared by the /memory search command and the memory tool (ToolDeps is
+ * structurally identical to CommandDeps). Reconcile reports a non-zero diff
+ * only when a file's size-mtime fingerprint changed since last index, so the
+ * toast is naturally rare — repeat searches over an unchanged tree stay quiet.
+ */
+export function reconcileAndNotify(deps: CommandDeps): void {
+  const stats = reconcile(deps.db, { root: deps.root, ccIndex: deps.config.memory.ccIndex });
+  if (stats.indexed === 0 && stats.removed === 0) return; // nothing changed on disk — stay quiet
+  const parts = [`${stats.indexed} indexed`];
+  if (stats.removed > 0) parts.push(`${stats.removed} removed`);
+  deps.notify?.(`🔄 mimo-cme: memory indexed — ${parts.join(", ")}`);
 }
 
 function statusText(deps: CommandDeps, cwd: string, sid: string): string {
@@ -127,7 +144,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
           return;
         }
         if (deps.config.checkpoint.reconcileOnSearch) {
-          reconcile(deps.db, { root: deps.root, ccIndex: deps.config.memory.ccIndex });
+          reconcileAndNotify(deps);
         }
         const hits = memorySearch(deps.db, {
           query,
