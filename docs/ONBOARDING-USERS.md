@@ -144,7 +144,7 @@ sequenceDiagram
     Ext->>Disk: BM25 search, return hits
     pi->>You: answer
 
-    Note over Ext: As context fills (20/40/60/80%)
+    Note over Ext: As context fills (window-scaled: every 20% / 10% / 5%)
     Ext->>Disk: serialize the conversation delta
     Ext-->>Disk: spawn a headless writer → updates checkpoint.md / MEMORY.md
     Ext->>pi: 💾 checkpoint saved
@@ -331,7 +331,7 @@ Create `~/.pi/agent/pi-mimo-cme/config.json`. Anything you omit keeps its defaul
 ```jsonc
 {
   "checkpoint": {
-    "thresholds": [20, 40, 60, 80],   // context-% crossings that trigger a checkpoint
+    "thresholds": "auto",             // window-scaled checkpoints (every 20%/10%/5%); or pin a flat array like [20,40,60,80]
     "scoreFloor": 0.15,               // how aggressively weak search hits are dropped (0 = keep all)
     "reconcileOnSearch": true,        // re-scan the file tree before each search (picks up hand edits)
     "maxWriterFailures": 3,           // give up after this many failed checkpoint writes

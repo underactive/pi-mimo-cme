@@ -8,6 +8,25 @@ test("DEFAULT_CONFIG enables the tasks layer and budgets the actor views", () =>
   assert.ok(DEFAULT_CONFIG.checkpoint.pushCaps.actors > 0);
 });
 
+test("DEFAULT_CONFIG scales thresholds with the window by default", () => {
+  assert.equal(DEFAULT_CONFIG.checkpoint.thresholds, "auto");
+});
+
+test("mergeConfig: an explicit threshold array pins a flat schedule", () => {
+  const merged = mergeConfig(DEFAULT_CONFIG, { checkpoint: { thresholds: [20, 40, 60, 80] } });
+  assert.deepEqual(merged.checkpoint.thresholds, [20, 40, 60, 80]);
+});
+
+test("mergeConfig: \"auto\" string is honored; junk strings fall back to default", () => {
+  assert.equal(mergeConfig(DEFAULT_CONFIG, { checkpoint: { thresholds: "auto" } }).checkpoint.thresholds, "auto");
+  // A non-array, non-"auto" value is ignored → default ("auto") survives.
+  assert.equal(
+    mergeConfig(DEFAULT_CONFIG, { checkpoint: { thresholds: "every-5" } as unknown as Record<string, unknown> })
+      .checkpoint.thresholds,
+    "auto",
+  );
+});
+
 test("mergeConfig honors tasks.enabled = false and a custom actors cap", () => {
   const merged = mergeConfig(DEFAULT_CONFIG, {
     tasks: { enabled: false },

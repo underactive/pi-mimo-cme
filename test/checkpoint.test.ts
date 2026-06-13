@@ -6,6 +6,7 @@ import { test } from "node:test";
 import {
   CheckpointManager,
   DELTA_CAP,
+  defaultThresholdsFor,
   newlyCrossed,
   serializeDelta,
   type WriterRequest,
@@ -75,6 +76,53 @@ test("newlyCrossed returns ascending uncrossed thresholds", () => {
   assert.deepEqual(newlyCrossed(45, [20, 40, 60, 80], new Set([20])), [40]);
   assert.deepEqual(newlyCrossed(10, [20, 40, 60, 80], new Set()), []);
   assert.deepEqual(newlyCrossed(100, [80, 20], new Set()), [20, 80]);
+});
+
+test("defaultThresholdsFor scales density with the window (MiMoCode tiers)", () => {
+  // ≤200K: every 20% — identical to the old flat default.
+  assert.deepEqual(defaultThresholdsFor(200_000), [20, 40, 60, 80]);
+  assert.deepEqual(defaultThresholdsFor(128_000), [20, 40, 60, 80]);
+  // 200K–500K: every 10% (9 fires).
+  assert.deepEqual(defaultThresholdsFor(400_000), [10, 20, 30, 40, 50, 60, 70, 80, 90]);
+  // >500K: every 5% (19 fires) — e.g. a 1M-window model.
+  const fine = defaultThresholdsFor(1_000_000);
+  assert.equal(fine.length, 19);
+  assert.deepEqual(fine.slice(0, 3), [5, 10, 15]);
+  assert.equal(fine.at(-1), 95);
+  // Unknown window (no contextUsage) falls back to the 20% schedule.
+  assert.deepEqual(defaultThresholdsFor(undefined), [20, 40, 60, 80]);
+  assert.deepEqual(defaultThresholdsFor(0), [20, 40, 60, 80]);
+});
+
+test("CheckpointManager with thresholds:'auto' fires at 5% steps on a 1M window", () => {
+  const db = openDb(":memory:");
+  const manager = new CheckpointManager({
+    db,
+    root: fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-auto-")),
+    thresholds: "auto",
+    maxWriterFailures: 3,
+    log: () => {},
+    // Resolve immediately so we don't block; we only assert firing decisions.
+    runWriter: async () => ({ ok: true }) satisfies WriterResult,
+  });
+  const messages = [{ role: "user", content: "x" }];
+  const big = { tokens: 70_000, contextWindow: 1_000_000 };
+  // 6% crosses the 5% tick on a 1M window — a flat [20,40,60,80] would NOT fire here.
+  assert.equal(
+    manager.maybeCheckpoint({ sid: "s1", pid: "p1", cwd: "/w", percent: 6, messages, parentContext: big }),
+    true,
+  );
+  // Same tick again → no refire.
+  assert.equal(
+    manager.maybeCheckpoint({ sid: "s1", pid: "p1", cwd: "/w", percent: 7, messages, parentContext: big }),
+    false,
+  );
+  // A small window in the SAME run resolves to the 20% schedule: 6% no longer fires.
+  const small = { tokens: 6_000, contextWindow: 100_000 };
+  assert.equal(
+    manager.maybeCheckpoint({ sid: "s2", pid: "p1", cwd: "/w", percent: 6, messages, parentContext: small }),
+    false,
+  );
 });
 
 test("CheckpointManager: fires once per threshold, inlines delta in prompt, advances seq on success", async () => {

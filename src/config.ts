@@ -16,7 +16,14 @@ export interface PushCaps {
 
 export interface CmeConfig {
   checkpoint: {
-    thresholds: number[];
+    /**
+     * Context-% crossings that fire the writer. `"auto"` (default) scales the
+     * schedule with the model's context window — MiMoCode's behavior, see
+     * `defaultThresholdsFor` in checkpoint.ts: every 20% ≤200K, 10% to 500K, 5%
+     * beyond. An explicit array (e.g. `[20,40,60,80]`) pins a flat schedule and
+     * ignores the window.
+     */
+    thresholds: number[] | "auto";
     scoreFloor: number;
     reconcileOnSearch: boolean;
     /**
@@ -45,7 +52,7 @@ export interface CmeConfig {
 
 export const DEFAULT_CONFIG: CmeConfig = {
   checkpoint: {
-    thresholds: [20, 40, 60, 80],
+    thresholds: "auto",
     scoreFloor: 0.15,
     reconcileOnSearch: true,
     reconcileDebounceMs: 4000,
@@ -82,6 +89,7 @@ export function mergeConfig(base: CmeConfig, overlay: Record<string, unknown>): 
   if (o.checkpoint && typeof o.checkpoint === "object") {
     const c = o.checkpoint;
     if (Array.isArray(c["thresholds"])) out.checkpoint.thresholds = c["thresholds"].filter((t) => typeof t === "number");
+    else if (c["thresholds"] === "auto") out.checkpoint.thresholds = "auto";
     if (typeof c["scoreFloor"] === "number") out.checkpoint.scoreFloor = c["scoreFloor"];
     if (typeof c["reconcileOnSearch"] === "boolean") out.checkpoint.reconcileOnSearch = c["reconcileOnSearch"];
     if (typeof c["reconcileDebounceMs"] === "number") out.checkpoint.reconcileDebounceMs = c["reconcileDebounceMs"];

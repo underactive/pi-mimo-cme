@@ -100,6 +100,23 @@ export function newlyCrossed(
 }
 
 /**
+ * MiMoCode's window-size → checkpoint-density schedule (their
+ * `src/session/prune.ts: defaultThresholdsFor`, design spec
+ * `2026-06-03-checkpoint-threshold-density-design.md`). Larger context windows
+ * fire denser so a fixed 20/40/60/80 doesn't leave huge unsaved spans on
+ * big-context models. The schedule is "every S%, from S to 100-S": S=20
+ * reproduces [20,40,60,80] (≤200K, identical to the old flat default); S=10
+ * fires every 10% (200K–500K); S=5 every 5% (>500K). An unknown window (no
+ * contextUsage at fire time) falls back to S=20 — exactly the prior behavior.
+ */
+export function defaultThresholdsFor(window: number | null | undefined): number[] {
+  const step = !window || window <= 200_000 ? 20 : window <= 500_000 ? 10 : 5;
+  const out: number[] = [];
+  for (let t = step; t <= 100 - step; t += step) out.push(t);
+  return out;
+}
+
+/**
  * The writer session's own token usage for one run (from its getSessionStats),
  * plus wall-clock. The Phase 3 "measure first" signal: `input` is the writer's
  * full-price cold-start cost, weighed against the parent context size (recorded
@@ -146,7 +163,12 @@ export type WriterFn = (req: WriterRequest) => Promise<WriterResult>;
 export interface CheckpointDeps {
   db: DatabaseSync;
   root: string;
-  thresholds: readonly number[];
+  /**
+   * Flat list of context-% crossings, or `"auto"` to scale the schedule with
+   * the parent context window per fire (see `defaultThresholdsFor`). When
+   * `"auto"`, the window comes from `maybeCheckpoint`'s `parentContext`.
+   */
+  thresholds: readonly number[] | "auto";
   maxWriterFailures: number;
   runWriter: WriterFn;
   /**
@@ -231,7 +253,14 @@ export class CheckpointManager {
   }): boolean {
     if (typeof args.percent !== "number") return false;
     const set = this.crossedSet(args.sid);
-    const crossed = newlyCrossed(args.percent, this.deps.thresholds, set);
+    // "auto" resolves against the live window each fire; a window change (model
+    // switch) just yields a different schedule — the crossed set is keyed by
+    // threshold value, so already-saved ticks stay saved and new ones still fire.
+    const thresholds =
+      this.deps.thresholds === "auto"
+        ? defaultThresholdsFor(args.parentContext?.contextWindow)
+        : this.deps.thresholds;
+    const crossed = newlyCrossed(args.percent, thresholds, set);
     if (crossed.length === 0) return false;
     for (const t of crossed) set.add(t);
     metaSet(this.deps.db, `crossed:${args.sid}`, JSON.stringify([...set]));

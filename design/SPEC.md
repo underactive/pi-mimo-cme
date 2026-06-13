@@ -158,9 +158,11 @@ system prompt teaches the append contract. Guard (§4.4) allows it.
 ### 4.3 Checkpoint writer (threshold-driven, in-process)
 
 - On `turn_end`: read `ctx.getContextUsage()` (inspect the real `ContextUsage` type in
-  `<pkg>/dist/core/extensions/types.d.ts`). Thresholds default `[20,40,60,80]` percent
-  (window-size-dependent tiers like MiMo are overkill here; keep flat default,
-  configurable). Track crossed set per session in memory + meta. On first crossing:
+  `<pkg>/dist/core/extensions/types.d.ts`). Thresholds default `"auto"` —
+  `defaultThresholdsFor(contextWindow)` mirrors MiMoCode's window-scaled density (every
+  20% ≤200K, 10% to 500K, 5% beyond; unknown window → 20%). A flat array (e.g.
+  `[20,40,60,80]`) in config pins a window-independent schedule. Track crossed set per
+  session in memory + meta. On first crossing:
   1. Serialize the conversation **delta** (entries after `last_checkpoint_seq`) from
      `ctx.sessionManager.getBranch()` — role-labeled markdown; tool calls condensed to
      `tool(name): <input ≤500 chars>`; tool results ≤500 chars; cap the inlined delta
@@ -288,7 +290,7 @@ README.md           # what/why, CME mapping, four layers, install, config, diver
 
 ```jsonc
 {
-  "checkpoint": { "thresholds": [20, 40, 60, 80], "scoreFloor": 0.15,
+  "checkpoint": { "thresholds": "auto", "scoreFloor": 0.15,
                   "reconcileOnSearch": true, "maxWriterFailures": 3,
                   "pushCaps": { "checkpoint": 11000, "memory": 10000, "global": 6000,
                                  "notes": 6000, "memoryKeys": 500 } },

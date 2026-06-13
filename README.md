@@ -13,7 +13,7 @@ concrete machinery:
 | Principle | Bottleneck | What pi-mimo-cme does |
 |---|---|---|
 | **Computation** | single-turn decision quality | injects memory instructions + project/global memory into the system prompt every turn; `memory` tool (BM25 recall with a relative score floor); `history` tool as the escalation target; zero-hit escalation ladder |
-| **Memory** | multi-turn continuity | `notes.md` scratchpad (taught, guarded); context-usage thresholds (20/40/60/80%) fire an in-process checkpoint-writer session; one-shot checkpoint dump after resume / fork / compaction; 70%/85% memory-flush nudges |
+| **Memory** | multi-turn continuity | `notes.md` scratchpad (taught, guarded); window-scaled context-usage thresholds (`"auto"`: every 20%/10%/5%) fire an in-process checkpoint-writer session; one-shot checkpoint dump after resume / fork / compaction; 70%/85% memory-flush nudges |
 | **Evolution** | cross-session improvement | `dream` pass (consolidate, dedupe, prune — auto every 7 days) and `distill` pass (package repeated workflows into pi skills/commands — manual by default) |
 
 Hierarchy principle (MiMoCode): *"the upper layers are more refined, more persistent,
@@ -93,7 +93,7 @@ constrained by a path guard that allows only `sessions/<sid>/notes.md` and
 ```jsonc
 {
   "checkpoint": {
-    "thresholds": [20, 40, 60, 80],   // context-% crossings that fire the writer
+    "thresholds": "auto",             // window-scaled schedule (every 20%/10%/5%); or pin a flat array like [20,40,60,80]
     "scoreFloor": 0.15,               // relative BM25 floor (0 disables)
     "reconcileOnSearch": true,        // lazy file-tree reconcile before memory searches
     "maxWriterFailures": 3,           // consecutive writer failures before giving up
@@ -143,9 +143,11 @@ Deliberate adaptations, in roughly decreasing order of consequence:
    them only at checkpoint rebuilds because its loop guarantees rebuilds happen; pi
    sessions may never compact, so the small upper layers are always present instead.
    The per-turn text is stable, so the provider prompt cache stays warm.
-2. **Flat thresholds.** MiMoCode scales threshold density with the model's context
-   window (every 5–20%). We default to a flat `[20, 40, 60, 80]` (configurable) —
-   window-size-dependent tiers are overkill for v1.
+2. **~~Flat thresholds.~~ Window-scaled thresholds (now matches MiMoCode).** Like
+   MiMoCode, `"thresholds": "auto"` (the default) scales checkpoint density with the
+   model's context window — every 20% ≤200K, every 10% to 500K, every 5% beyond — so
+   big-context models (e.g. 1M windows) checkpoint ~4× finer than a flat schedule. Pin a
+   flat array (e.g. `[20, 40, 60, 80]`) to opt out and ignore the window.
 3. **Distill auto-runs are off by default.** MiMoCode auto-distills every 30 days.
    Creating skills/extensions unprompted is more invasive than editing memory files, so
    `/distill` is manual unless you set `"distill": { "auto": true }`.

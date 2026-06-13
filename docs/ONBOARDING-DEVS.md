@@ -503,7 +503,7 @@ Documented in full in the README; the load-bearing ones for a developer:
 1. **Project/global memory ride in the system prompt every turn** (MiMo injects only at
    rebuild). pi sessions may never compact, so we always carry the small upper layers; the
    text is stable so the prompt cache stays warm.
-2. **Flat `[20,40,60,80]` thresholds** instead of window-size-scaled tiers.
+2. **Window-scaled `"auto"` thresholds** (matches MiMo: every 20% ≤200K, 10% to 500K, 5% beyond); a flat array like `[20,40,60,80]` opts out.
 3. **Distill auto-off by default** (creating assets is invasive).
 4. **No preStop validators in v1** — the writer prompt's budget text and dream's prune phase
    carry that pressure instead.
