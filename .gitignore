@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Build output
+# (tsconfig sets noEmit and pi runs src/*.ts directly, so these normally
+# never appear — kept as a guard against an accidental `tsc` emit.)
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# SQLite memory database + WAL/SHM/journal sidecars.
+# The real DB lives under ~/.pi/agent/memory/, but a repo-local
+# PI_CODING_AGENT_DIR or a copied-in DB for inspection would land here.
+*.db
+*.sqlite
+*.sqlite3
+*-wal
+*-shm
+*-journal
+
+# pi agent runtime state, if pointed at the repo
+.pi/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test / coverage artifacts
+coverage/
+.nyc_output/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# macOS
+.DS_Store
