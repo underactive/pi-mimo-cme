@@ -6,16 +6,15 @@ does it, *where* each piece lives, and *which invariants will bite you* if you t
 carelessly.
 
 Authoritative companions in-repo, read before large changes:
-- `design/SPEC.md` — the build spec (section numbers below cite it).
-- `research/mimo-memory-system.md` — MiMoCode's schemas and **verbatim prompts** (the
+- `docs/design/SPEC.md` — the build spec (section numbers below cite it).
+- `docs/research/mimo-memory-system.md` — MiMoCode's schemas and **verbatim prompts** (the
   source we adapted; checkpoint/dream/distill prompt text comes from here).
-- `research/pi-extension-api.md` — the pi v0.79.x extension API and its gotcha checklist.
+- `docs/research/pi-extension-api.md` — the pi v0.79.x extension API and its gotcha checklist.
 
-> ⚠️ **One stale reference to know about:** `design/SPEC.md §1` says the memory root is
-> `~/.pi/agent/memory/`. The shipped code uses `~/.pi/agent/pi-mimo-cme/` (see
-> `src/paths.ts` `memoryRoot()`), renamed so it can't collide with a future pi-native
-> `memory/` feature. **`src/paths.ts` is the source of truth for all paths**; the README
-> reflects the final layout, the SPEC's §1 path does not.
+> **Paths source of truth:** `src/paths.ts` `memoryRoot()` defines the memory root as
+> `~/.pi/agent/pi-mimo-cme/` (the package name, not a generic `memory/`, so it can't
+> collide with a future pi-native `memory/` feature). When a doc and the code disagree on
+> a path, **`src/paths.ts` wins.**
 
 ---
 
@@ -543,5 +542,5 @@ Documented in full in the README; the load-bearing ones for a developer:
 | Commands & UI | SPEC §6, `commands.ts`, `index.ts refreshStatus` |
 | Config | SPEC §8, `config.ts` |
 | Engineering constraints & acceptance checks | SPEC §9–§10 |
-| Verbatim MiMoCode prompts/templates we adapted | `research/mimo-memory-system.md` |
-| pi v0.79.x API + gotcha checklist | `research/pi-extension-api.md` |
+| Verbatim MiMoCode prompts/templates we adapted | `docs/research/mimo-memory-system.md` |
+| pi v0.79.x API + gotcha checklist | `docs/research/pi-extension-api.md` |

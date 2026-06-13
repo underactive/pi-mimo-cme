@@ -401,4 +401,4 @@ restart pi to retry.
 
 - Curious how it's built, or want to extend it? → [ONBOARDING-DEVS.md](./ONBOARDING-DEVS.md)
 - The design rationale and every deliberate divergence from MiMoCode → the project
-  [README.md](../README.md) and `design/SPEC.md`.
+  [README.md](../README.md) and `docs/design/SPEC.md`.

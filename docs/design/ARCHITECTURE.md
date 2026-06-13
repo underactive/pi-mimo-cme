@@ -45,10 +45,12 @@ src/
   templates.ts  checkpoint (11 §) / MEMORY (4 §) / notes templates + section budgets   [pure]
   inject.ts     system-prompt appendix + rebuild-dump assembly
   history.ts    message_end extraction, per-session seq counter, JSONL backfill
+  footer-counts.ts cached footer counters (idx/hist) — zero per-turn COUNT(*)     [pure-ish]
   checkpoint.ts usage thresholds, delta serialization, in-process writer via runWriter (queue depth 1), nudges
+  actors.ts     subagent (actor) ledger + progress.md journals from pi-subagents events   [pure]
   guard.ts      path guard for write/edit under the memory root                   [pure]
   tools.ts      `memory` + `history` tool definitions
-  commands.ts   /memory /dream /distill, reconcile+notify, status text
+  commands.ts   /memory (status/search/metrics/dream/distill), /dream, /distill, reconcile+notify, status text
   prompts/      checkpoint-writer.ts, dream.ts, distill.ts — adapted MiMoCode prompts (template fns)
 ```
 

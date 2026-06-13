@@ -12,8 +12,8 @@ Research date: 2026-06-13. **Purpose:** the definitive structural diff between u
 Everything labeled with a `file:line` is **confirmed from source** at these commits. Paths are relative to `packages/opencode/src/` unless prefixed otherwise. `[OC]` tags refer to the OpenCode clone.
 
 **Companion docs (read alongside this one):**
-- `research/mimo-memory-system.md` — the deep **"HOW it works"** reference: verbatim prompts (checkpoint-writer / dream / distill), full SQL schemas, the 11-section checkpoint template, ranking math, write/read lifecycle. **This doc deliberately does not duplicate those internals** — it gives the structural map and points there for the body.
-- `research/pi-extension-api.md` — the Pi v0.79.1 API surface the re-implementation targets.
+- `docs/research/mimo-memory-system.md` — the deep **"HOW it works"** reference: verbatim prompts (checkpoint-writer / dream / distill), full SQL schemas, the 11-section checkpoint template, ranking math, write/read lifecycle. **This doc deliberately does not duplicate those internals** — it gives the structural map and points there for the body.
+- `docs/research/pi-extension-api.md` — the Pi v0.79.1 API surface the re-implementation targets.
 
 > **How the two memory docs divide labor:** `mimo-memory-system.md` answers *"what does the memory system do and how?"* This doc answers *"which parts are MiMoCode's and which are inherited OpenCode, and where do they bolt together?"* If you're debugging, start here to localize the subsystem, then jump to `mimo-memory-system.md` for the internals.
 

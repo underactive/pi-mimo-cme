@@ -67,6 +67,8 @@ Development: `npm install`, then `npm run typecheck` and `npm test` (Node ≥ 24
 - `/memory` — status: per-scope index counts, history row counts, db size, last
   dream/distill timestamps, current session/project paths.
 - `/memory search <query>` — run the same BM25 search the model uses; prints top hits.
+- `/memory metrics` — the checkpoint-writer cost readout (writer tokens vs. parent
+  context per run) with a fork-vs-delta build-or-skip verdict (see divergence #5).
 - `/memory dream`, `/memory distill` — aliases for the commands below.
 - `/dream` — manual consolidation pass **in the current session** (you watch it work).
 - `/distill` — manual workflow-packaging pass in the current session.
@@ -96,10 +98,11 @@ constrained by a path guard that allows only `sessions/<sid>/notes.md` and
     "thresholds": "auto",             // window-scaled schedule (every 20%/10%/5%); or pin a flat array like [20,40,60,80]
     "scoreFloor": 0.15,               // relative BM25 floor (0 disables)
     "reconcileOnSearch": true,        // lazy file-tree reconcile before memory searches
+    "reconcileDebounceMs": 4000,      // skip the reconcile walk if one ran this recently in-session (0 disables)
     "maxWriterFailures": 3,           // consecutive writer failures before giving up
     "pushCaps": {                     // per-section token budgets for injection
       "checkpoint": 11000, "memory": 10000, "global": 6000,
-      "notes": 6000, "memoryKeys": 500
+      "notes": 6000, "memoryKeys": 500, "actors": 2000
     }
   },
   "history": {
@@ -107,6 +110,7 @@ constrained by a path guard that allows only `sessions/<sid>/notes.md` and
     "kinds": ["user_text", "assistant_text", "tool_input", "tool_error"]
   },
   "memory": { "ccIndex": false },     // index ~/.claude/projects/*/memory as scope "cc"
+  "tasks":  { "enabled": true },      // observe @tintinweb/pi-subagents events → actor ledger (off = skip the wiring)
   "dream":   { "auto": true,  "intervalDays": 7 },
   "distill": { "auto": true, "intervalDays": 30 }
 }

@@ -13,15 +13,15 @@ import from it. Pinned to **v0.79.1** — its `types.d.ts`, `docs/`, and ~80 bun
 - `docs/ONBOARDING-DEVS.md` — the developer/agent guide: module-by-module detail, event wiring, invariants, with
   Mermaid diagrams. **Start here when modifying the extension.**
 - `docs/ONBOARDING-USERS.md` — what the system does from a user's perspective.
-- `design/SPEC.md` — the build spec (section numbers cited in comments).
-- `design/ARCHITECTURE.md` — the high-level architecture of the extension, including how the memory pipeline,
+- `docs/design/SPEC.md` — the build spec (section numbers cited in comments).
+- `docs/design/ARCHITECTURE.md` — the high-level architecture of the extension, including how the memory pipeline,
   handlers, and pi integration fit together.
-- `research/mimo-memory-system.md` — MiMoCode's schemas and **verbatim prompts** (the source the checkpoint/dream/
+- `docs/research/mimo-memory-system.md` — MiMoCode's schemas and **verbatim prompts** (the source the checkpoint/dream/
   distill prompts were adapted from). The **"how it works"** reference.
-- `research/opencode-mimocode-fork-delta.md` — the **structural diff** between upstream OpenCode and the MiMoCode
+- `docs/research/opencode-mimocode-fork-delta.md` — the **structural diff** between upstream OpenCode and the MiMoCode
   fork: which dirs/files/migrations/hooks are MiMoCode inventions vs inherited OpenCode, the ~8 session-loop
   integration seams, and a symptom→reference table. **The "what changed from upstream / debugging baseline" reference.**
-- `research/pi-extension-api.md` — the pi v0.79.x extension API and its gotcha checklist.
+- `docs/research/pi-extension-api.md` — the pi v0.79.x extension API and its gotcha checklist.
 
 
 The README documents the user-facing config (`config.json`), tools, session flow, and the deliberate divergences from

@@ -11,9 +11,9 @@ around MiMoCode's three principles:
   (workflow packaging, 30d) passes.
 
 Authoritative references (READ BOTH BEFORE WRITING CODE):
-- `research/mimo-memory-system.md` — what to build (schemas, templates, prompts — copy
+- `docs/research/mimo-memory-system.md` — what to build (schemas, templates, prompts — copy
   the verbatim artifacts from here, adapted only where noted below).
-- `research/pi-extension-api.md` — how to build it on Pi v0.79.1 (exact API signatures,
+- `docs/research/pi-extension-api.md` — how to build it on Pi v0.79.1 (exact API signatures,
   gotchas checklist §12, skeleton example §11).
 
 Hierarchy principle (from MiMoCode): "the upper layers are more refined, more persistent,
@@ -23,8 +23,9 @@ and smaller; the lower layers are more complete, larger, and slower."
 
 ## 1. Storage layout
 
-Root: `path.join(getAgentDir(), "memory")` → `~/.pi/agent/pi-mimo-cme/` (respects
-`PI_CODING_AGENT_DIR`).
+Root: `path.join(getAgentDir(), "pi-mimo-cme")` → `~/.pi/agent/pi-mimo-cme/` (respects
+`PI_CODING_AGENT_DIR`). The root is the package name, not a generic `memory/`, so it
+can't collide with a future pi-native `memory/` feature (see `src/paths.ts` `memoryRoot()`).
 
 ```
 ~/.pi/agent/pi-mimo-cme/
@@ -58,7 +59,8 @@ history_fts + history_fts_idx):
 - Schema versioning: `PRAGMA user_version`; simple sequential migrations.
 
 `scope` ∈ `global | projects | sessions | cc`. `type` detected from key by regex like
-MiMoCode (`memory*`→memory, `checkpoint*`→checkpoint, `notes*`→notes, else `free`); `cc`
+MiMoCode (`memory*`→memory, `checkpoint*`→checkpoint, `notes*`→notes, `progress*`→progress
+[actor journals], else `free`); `cc`
 scope reads `metadata.type` from YAML frontmatter (feedback/project/reference/user).
 
 ## 3. Computation — read path
@@ -234,7 +236,7 @@ ground rules, phases, keyword lists, the 200-line/10KB cap, `[unverified]` marks
   (MiMoCode: "This command is manual. The user intentionally started it and is
   watching.").
 
-### 5.2 Distill (workflow packaging, default auto **off** — divergence, noted in README)
+### 5.2 Distill (workflow packaging, default auto **on**, every 30 days — matches MiMoCode)
 
 Same dual mode with MiMoCode's distill.txt structure (research §8.3): inventory existing
 assets under `~/.pi/agent/skills/`, `~/.pi/agent/extensions/`, project `.pi/`; "at least
@@ -276,10 +278,12 @@ src/budget.ts       # token estimate, budgetedRead with truncation marker
 src/templates.ts    # checkpoint/MEMORY/notes templates + section budgets (verbatim from research §6)
 src/inject.ts       # system-prompt assembly + rebuild dump assembly
 src/history.ts      # message_end indexing, seq counters, JSONL backfill
+src/footer-counts.ts # cached footer counters (idx/hist) — zero per-turn COUNT(*) [pure-ish]
 src/checkpoint.ts   # usage thresholds, delta serialization, in-process writer (runWriter dep), nudges
+src/actors.ts       # subagent (actor) ledger + progress.md journals from pi-subagents events [pure]
 src/guard.ts        # tool_call path guard
 src/tools.ts        # memory + history tool definitions
-src/commands.ts     # /memory /dream /distill
+src/commands.ts     # /memory (status/search/metrics/dream/distill), /dream, /distill
 src/prompts/checkpoint-writer.ts  # adapted prompt as exported template fn
 src/prompts/dream.ts
 src/prompts/distill.ts
@@ -292,11 +296,13 @@ README.md           # what/why, CME mapping, four layers, install, config, diver
 ```jsonc
 {
   "checkpoint": { "thresholds": "auto", "scoreFloor": 0.15,
-                  "reconcileOnSearch": true, "maxWriterFailures": 3,
+                  "reconcileOnSearch": true, "reconcileDebounceMs": 4000,
+                  "maxWriterFailures": 3,
                   "pushCaps": { "checkpoint": 11000, "memory": 10000, "global": 6000,
-                                 "notes": 6000, "memoryKeys": 500 } },
+                                 "notes": 6000, "memoryKeys": 500, "actors": 2000 } },
   "history": { "kinds": ["user_text", "assistant_text", "tool_input", "tool_error"] },
   "memory":  { "ccIndex": false },     // index ~/.claude/projects/*/memory as scope "cc"
+  "tasks":   { "enabled": true },      // observe pi-subagents events → actor ledger (Phase 2)
   "dream":   { "auto": true,  "intervalDays": 7 },
   "distill": { "auto": true, "intervalDays": 30 }
 }
