@@ -182,22 +182,30 @@ Deliberate adaptations, in roughly decreasing order of consequence:
    fork call is made from data, not theory. The delta thus remains a condensed text handoff
    (tool I/O clipped to 500 chars, whole delta capped at ~100KB, newest kept). Dream/distill
    still run as subprocesses (long-running, fire-and-forget, process-isolated).
-6. **Actor (subagent) ledger, but no user task graph.** When `@tintinweb/pi-subagents`
-   is loaded, the extension observes its lifecycle events over `pi.events` — a soft,
-   optional dependency: no `import`, no spawn RPC, purely serializable event payloads —
-   and derives an `actor` ledger plus per-subagent `progress.md` journals under
-   `sessions/<sid>/tasks/<id>/` (synthesized from completion payloads, since we can't run
-   a `postStop` hook inside another extension's subagent). The ledger is scoped to
-   **background** subagents: pi-subagents emits `created` and the terminal
-   `completed`/`failed` events only for background agents — foreground agents emit just
-   `started` and return their result inline, so the conversation delta already captures
-   them. (Verified end-to-end against live pi-subagents via `scripts/smoke-subagents.sh`.) checkpoint §4 (renamed Task
-   tree → Subagents) is reconciled from that ledger via an inlined SUBAGENT PROGRESS
-   block, and the rebuild dump surfaces in-flight actors under `## Active actors`. What
-   MiMoCode had that we still don't: the *user task graph* (`task`/`task_event`) —
-   pi-subagents exposes the actor half only. With pi-subagents absent the ledger stays
-   empty and §4 renders "(no subagents this session)"; nothing breaks. Toggle the whole
-   layer with `"tasks": { "enabled": false }`.
+6. **Actor (subagent) ledger + user task graph — both via soft community-extension deps.**
+   *Actor half:* when `@tintinweb/pi-subagents` is loaded, the extension observes its
+   lifecycle events over `pi.events` — a soft, optional dependency: no `import`, no spawn
+   RPC, purely serializable event payloads — and derives an `actor` ledger plus per-subagent
+   `progress.md` journals under `sessions/<sid>/tasks/<id>/` (synthesized from completion
+   payloads, since we can't run a `postStop` hook inside another extension's subagent). The
+   ledger is scoped to **background** subagents: pi-subagents emits `created` and the
+   terminal `completed`/`failed` events only for background agents — foreground agents emit
+   just `started` and return their result inline, so the conversation delta already captures
+   them. (Verified end-to-end against live pi-subagents via `scripts/smoke-subagents.sh`.)
+   *Task-graph half:* when `@juicesharp/rpiv-todo` is loaded, the extension reads its task
+   snapshot — also softly, never imported. rpiv-todo emits nothing on the bus and writes no
+   disk; instead every `todo` tool-result carries the full task list in its `details`, so we
+   reconstruct the live graph by scanning the session branch last-write-wins, exactly as
+   rpiv-todo's own replay does (plan §7; verified end-to-end via `scripts/smoke-todo-branch.sh`).
+   checkpoint **§4 Task tree** (restored to MiMoCode's name) is reconciled from an inlined
+   TASK GRAPH block (the todos) plus a `### Subagents` sub-block (the actor ledger), and the
+   rebuild dump surfaces open todos under `## Open tasks` above in-flight actors under
+   `## Active actors`. Fidelity caveats vs MiMoCode's `task`/`task_event`: rpiv-todo is a flat
+   list + `blockedBy` dependency DAG (not a parent/child tree), carries **no timestamps**
+   (so `task_archive_days` is unfillable and not implemented), and exposes **snapshots only**
+   (no `task_event` history log). With both deps absent the ledger/snapshot stay empty and §4
+   renders "(no tasks or subagents this session)"; nothing breaks. Toggle the whole layer
+   with `"tasks": { "enabled": false }`.
 7. **History rows are keyed by `(session_id, seq)`** with a synthetic
    `message_id = "<sid>#<seq>"`, rather than MiMoCode's message/part IDs — pi exposes
    messages, not parts. Dream/distill prompts document this schema for their SQL phase.

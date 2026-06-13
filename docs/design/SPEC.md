@@ -61,7 +61,8 @@ history_fts + history_fts_idx):
 `scope` ∈ `global | projects | sessions | cc`. `type` detected from key by regex like
 MiMoCode (`memory*`→memory, `checkpoint*`→checkpoint, `notes*`→notes, `progress*`→progress
 [actor journals], else `free`); `cc`
-scope reads `metadata.type` from YAML frontmatter (feedback/project/reference/user).
+scope reads `metadata.type` (block or inline-flow) — or a top-level `type:` — from YAML
+frontmatter (feedback/project/reference/user); other/absent → free.
 
 ## 3. Computation — read path
 
@@ -183,8 +184,11 @@ system prompt teaches the append contract. Guard (§4.4) allows it.
      NOTES_PATH "USE THESE VERBATIM"); the conversation source is the delta inlined
      between `===== BEGIN CONVERSATION DELTA =====` / `===== END CONVERSATION DELTA =====`
      markers at the end of the prompt instead of live history (no tool needed to obtain
-     it); drop §4 task-tree machinery and SUBAGENT PROGRESS blocks (render §4 as
-     "(no task registry)"); keep all 11 sections, the §1 verbatim-quote anchor,
+     it); §4 "Task tree" is reconciled from an inlined TASK GRAPH block (the
+     @juicesharp/rpiv-todo snapshot read from the branch) plus a `### Subagents`
+     sub-block from an inlined SUBAGENT PROGRESS block (the actor ledger), rendering
+     "(no tasks or subagents this session)" when both are empty (plan §7); keep all
+     11 sections, the §1 verbatim-quote anchor,
      COMMITMENT vs INSPECTION rule, EXACT-FORM CONSTRAINT LITERAL rule, section budgets
      `{{SECTION_BUDGETS}}` substituted (research §6 budgets), spillover-extraction rule,
      notes.md wipe-to-template rule.

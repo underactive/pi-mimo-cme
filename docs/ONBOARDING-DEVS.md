@@ -75,6 +75,7 @@ src/
   paths.ts        # memory root, pid/sid → file paths, type-from-key regex, actor tasks/ paths   [pure]  ← source of truth for layout
   db.ts           # openDb/migrate (PRAGMA user_version), schema SQL (memory_fts, history_fts, meta, actor), meta get/set
   actors.ts       # actor (subagent) ledger: pi-subagents event → actor row + progress.md; §4/rebuild renderers   [pure]
+  tasks.ts        # user task graph: rpiv-todo branch snapshot → readTaskSnapshot + buildTaskTree (§4 + rebuild)   [pure, no DB]
   fts.ts          # buildFtsQuery (OR + AND), memorySearch (score floor), historySearch/around   [pure-ish]
   reconcile.ts    # tree walk + fingerprint upsert/prune (+ optional "cc" scope)
   budget.ts       # token estimate + budgetedRead with truncation marker      [pure]
@@ -514,11 +515,18 @@ Documented in full in the README; the load-bearing ones for a developer:
    and tool schema, so the delta stays a condensed text handoff. True reuse would need
    MiMoCode's `fork=true` (the parent's full prefix + tool schema), which even MiMoCode leaves
    off by default. Dream/distill remain subprocesses.
-6. **Actor (subagent) ledger, no user task graph** — `checkpoint.md §4` (renamed Task tree →
-   Subagents) is reconciled from `actors.ts`, which observes `@tintinweb/pi-subagents` events
-   over `pi.events` (soft/optional dep). We get the *actor* half (who ran, status, result), not
-   MiMoCode's user *task graph* (`task`/`task_event`). pi-subagents absent ⇒ §4 renders
-   "(no subagents this session)". Gate with `"tasks": { "enabled": false }`. **Scoped to
+6. **Actor (subagent) ledger + user task graph** — `checkpoint.md §4 Task tree` (restored to
+   MiMoCode's name) is reconciled from TWO inlined blocks: a TASK GRAPH block (the user task
+   graph) and a `### Subagents` sub-block (the actor ledger). *Actor half* = `actors.ts`,
+   observing `@tintinweb/pi-subagents` events over `pi.events` (soft/optional dep). *Task-graph
+   half* = `tasks.ts` (a *pure* module, no DB), reading the `@juicesharp/rpiv-todo` snapshot from
+   the session branch last-write-wins — rpiv-todo emits no events and writes no disk, so we scan
+   its `todo` tool-result `details` exactly as its own `replay.ts` does (plan §7; soft/optional
+   dep, verified live via `scripts/smoke-todo-branch.sh`). The rebuild dump adds `## Open tasks`
+   above `## Active actors`. Fidelity caveats: rpiv-todo is a flat list + `blockedBy` DAG, no
+   timestamps (so no `task_archive_days`), snapshots only (no `task_event` log). Both deps absent
+   ⇒ §4 renders "(no tasks or subagents this session)". Gate with `"tasks": { "enabled": false }`.
+   **Scoped to
    background subagents:** pi-subagents emits `created` + terminal `completed`/`failed` only for
    background agents (foreground agents emit just `started` and return inline → already in the
    delta), so `created` is the sole row-introducer and other phases are gated on an existing row

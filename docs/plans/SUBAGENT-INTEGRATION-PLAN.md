@@ -363,3 +363,153 @@ to `(no task registry)`, and nothing breaks.
 Tests: extend `checkpoint.test.ts` for the in-memory writer path (mock `createAgentSession`),
 add an actor-ledger test, a `progress`-type regex test in `paths.test.ts`, and a path-guard
 case allowing `tasks/<id>/` for the writer and denying it for the main agent.
+
+---
+
+## 7. Addendum (2026-06-13): closing the **user-task-graph** gap via `@juicesharp/rpiv-todo` (Option A)
+
+§4.2 left the **user task graph** (MiMoCode's `task`/`task_event`, the source of truth for
+checkpoint §4 "Task tree") as an open ❌: "optional — depend on a todo extension, or derive a
+lighter actor ledger instead." This addendum resolves that row. We **can** fill it with the
+community extension `@juicesharp/rpiv-todo` (v1.19.1, installed at
+`~/.pi/agent/npm/node_modules/@juicesharp/rpiv-todo`), but the integration shape is **not** the
+event-bus pattern §4.3 assumed — and that distinction is the whole design.
+
+### 7.1 The contract correction (why this isn't the actor pattern)
+
+The actor layer (§4.3) works because pi-subagents **emits serializable lifecycle events** on
+`pi.events` (`subagents:created|…|completed`) that we observe without importing it. **rpiv-todo
+emits nothing on any bus and writes nothing to disk** (verified against its source — grep for
+`pi.events`/`emit`/`publish`/`saveJsonConfig`: zero matches). Its only `pi.*` surface is
+`registerTool("todo")`, `registerCommand`, and *listeners*. So the `tasks:*` subscription §4.3
+sketched **has no emitter to subscribe to** — building a push-fed `TaskLedger` would wire to a
+dead channel.
+
+What rpiv-todo *does* expose is a different, equally serializable seam: **every `todo`
+tool-result message carries the complete task snapshot in its `details` field.**
+
+- Data model (`rpiv-todo/tool/types.ts:26-39`): `Task { id:number; subject; description?;
+  activeForm?; status; blockedBy?:number[]; owner?; metadata? }`, `status ∈ pending |
+  in_progress | completed | deleted`. It is a **flat list + a `blockedBy` dependency DAG**
+  (`state/task-graph.ts` rejects cycles), **not** a parent/child tree, and carries **no
+  timestamps**.
+- Persistence (`tool/response-envelope.ts:79-93`): each successful `todo` call returns
+  `details: { action, params, tasks: Task[], nextId }`. rpiv-todo itself reconstructs live state
+  after `/reload`/compaction by **replaying the branch** — `state/replay.ts:24-38` walks
+  `ctx.sessionManager.getBranch()` and takes the **last** `toolResult` whose `toolName==="todo"`
+  and whose `details` matches `isTaskDetails` (`Array.isArray(tasks) && typeof nextId==="number"`).
+  Last-write-wins; the latest snapshot is the complete state.
+
+⇒ **VERDICT: serviceable via the conversation tool-call stream.** Any extension holding `ctx`
+can run the identical ~12-line scan over the shared branch and reconstruct the live task graph —
+no import, no second copy of pi core.
+
+### 7.2 Why Option A is nearly free here
+
+pi-mimo-cme **already fetches the exact branch entries** this needs:
+`branchMessages(ctx)` (`index.ts:241-245`) is `getBranch().filter(type==="message").map(e =>
+e.message)` — the same `e.message` objects rpiv-todo reads `.details` off. Those branch messages
+already flow into the checkpoint writer's delta (`index.ts:522,538` → `serializeDelta`). The only
+reason the task snapshot isn't already reaching the writer is that **`serializeDelta`
+(`checkpoint.ts:76-83`) reads `toolResult` `m.content` (the human text) and ignores `m.details`.**
+Option A is therefore "scan the branch messages we already hold for the last todo snapshot, render
+it." No new `getBranch()` call, **no DB table, no migration, no event subscription, no path-guard
+change** (rpiv-todo writes nothing to disk).
+
+### 7.3 Option A design (read-time snapshot → checkpoint §4 + rebuild)
+
+Purely additive; soft-gated under the **existing** `config.tasks.enabled` flag (no new gate).
+
+1. **New pure module `src/tasks.ts`** (mirrors `src/actors.ts`'s *pure* half — no DB):
+   - `TodoTask` type + `isTaskDetails(v)` discriminator (copy of rpiv-todo's, byte-compatible).
+   - `readTaskSnapshot(messages: unknown[]): TodoTask[]` — last-write-wins scan over the
+     `branchMessages`-shaped array for `role==="toolResult" && toolName==="todo" &&
+     isTaskDetails(details)`, returns `details.tasks` (non-deleted unless asked).
+   - `buildTaskTree(tasks, cap)` — renders `[status] #id subject (activeForm) ⛓ #dep,…` lines
+     grouped in_progress → pending → completed, budget-clipped; returns `""`/placeholder when
+     empty. Style mirrors `buildSubagentProgress` (`actors.ts:370`).
+2. **Checkpoint §4 becomes two sub-sections.** `templates.ts:24-26` §4 header gains
+   `### Task tree` + `### Subagents`; the writer prompt (`prompts/checkpoint-writer.ts`) gets a
+   parallel **TASK GRAPH** inlined block + a §4 reconcile paragraph mirroring the SUBAGENT
+   PROGRESS one ("reconcile the TASK GRAPH block; use task IDs exactly as given; never invent").
+   A new `taskTree` closure is injected at `index.ts:226-228` beside `subagentProgress`, threaded
+   through `CheckpointManager` like the existing optional dep (`checkpoint.ts:180,336`). §4 budget
+   (`templates.ts:84`, currently `1000`) is split/bumped to cover both halves.
+3. **Rebuild dump** (`inject.ts`): add a `## Task tree` (or `## Tasks ledger`) section built from
+   `buildTaskTree` immediately **before** `## Active actors` (`inject.ts:259-263`) — the task graph
+   is the broader frame, subagents are leaves. `isCheckpointEmpty` (`inject.ts:224`) already
+   tolerates a tasks placeholder.
+4. **Config:** add one push cap `pushCaps.tasks` (default ~2000) for the ledger section
+   (`config.ts:7-15` interface + `:60-67` defaults; the merge loop at `:97-102` auto-picks it up).
+   Reader is soft: rpiv-todo absent ⇒ no `todo` results ⇒ snapshot empty ⇒ §4 Task tree renders
+   "(no tasks this session)", identical to the actor-absent path. **`config.tasks.enabled` already
+   exists and already gates the task side** — the reader hangs off the same flag.
+
+### 7.4 Honest fidelity gaps vs MiMoCode (what Option A does NOT close)
+
+| MiMoCode `task`/`task_event` | rpiv-todo via Option A | Status |
+|---|---|---|
+| Task **tree** (parent/children) | flat list + `blockedBy` DAG | relabel §4 "Task tree" → still a graph, just edges-not-tree |
+| `task_event` append-log (history) | snapshots only | event log derivable only by diffing snapshots — **deferred**, not built |
+| created/updated/completed **timestamps** | none in the `Task` type | **`task_archive_days` is unfillable from this source** — drop that key |
+| Cross-session task registry | current session's branch only | snapshot is session-scoped (matches our actor ledger's per-session scope) |
+
+These are inherent to rpiv-todo's model, not the integration; the **core** of the gap (live task
+state surfaced into checkpoints + rebuild) closes cleanly. Option B (a `task`/`task_event` table
+fed by observing `tool_execution_end` for `toolName==="todo"`) would add cross-session history but
+is deferred — not needed for the §4/rebuild use case.
+
+### 7.5 Confirmation gate (run before implementing)
+
+The whole design hinges on one empirical fact: **does the `todo` tool-result `details` payload
+actually survive in the branch messages pi-mimo-cme reaches via `getBranch()`?** Static evidence is
+strong (rpiv-todo reads `e.message.details` from the same API in production), but this is gated on a
+live check: a throwaway probe extension runs the exact `branchMessages` + replay scan in a real
+headless `pi -e probe.ts -p "<create two todos>"` run with rpiv-todo installed (isolated agent dir,
+harness modeled on `scripts/smoke-subagents.sh`).
+
+> **GATE RESULT: ✅ PASS (2026-06-13, `scripts/smoke-todo-branch.sh` against rpiv-todo@1.19.1,
+> pi 0.79.3).** A real headless run made 3 `todo` calls (create/create/update); the probe ran the
+> exact `branchMessages` + replay scan over `getBranch()` and found **all 3 tool-results carried a
+> valid `TaskDetails` payload**, with the last-write-wins snapshot correctly reconstructing 2 tasks
+> (incl. `#1` flipped to `in_progress` with its `activeForm`). The branch toolResult message keys are
+> `[role, toolCallId, toolName, content, details, isError, timestamp]` — `details = {action, params,
+> tasks, nextId}` is present in-process. Proceeding to implement §7.3. (Probe + harness:
+> `scripts/probe-todo-branch.ts`, `scripts/smoke-todo-branch.sh` — throwaway, not part of the
+> shipped extension.)
+
+Tests (on PASS): `tasks.test.ts` for `readTaskSnapshot` (last-write-wins, deleted-filtering,
+empty/garbage `details`) + `buildTaskTree` (grouping, budget clip, empty placeholder); an
+`inject.test.ts` case for the `## Open tasks` section; a `checkpoint.test.ts` case for the
+inlined TASK GRAPH block; a `config.test.ts` case for `pushCaps.tasks`.
+
+### 7.6 IMPLEMENTATION STATUS — ✅ SHIPPED (2026-06-13, branch `notify-memory-transformations`)
+
+Option A is built, green, and live-verified. **99/99 tests, tsc clean.** One refinement vs the
+§7.3 sketch, made during implementation and strictly better:
+
+- **§4 is RESTORED to MiMoCode's name "§4 Task tree"** (not "two `###` sub-sections under a new
+  title"). The body is the user task graph (one line per todo); subagents move under a
+  `### Subagents` sub-block *within* §4. This keeps a single editable body (compatible with the
+  writer's per-section Edit discipline) AND **closes the audit's "§4 renamed Task tree → Subagents"
+  divergence** — §4's title and its `1000` budget are now byte-identical to MiMoCode again. The
+  budget key was renamed `"§4 Subagents"` → `"§4 Task tree"` (value unchanged).
+- **Source of truth = the branch snapshot, not a DB.** `src/tasks.ts` is a *pure* module
+  (`readTaskSnapshot` + `buildTaskTree`, no DB, no pi imports) — the todo snapshot is already
+  persisted in the conversation, so unlike the actor ledger there is nothing to store. No
+  `task`/`task_event` table, no migration, no event subscription, no path-guard change.
+- **Files touched (7 + 1 new):** `src/tasks.ts` (new pure module); `config.ts` (`pushCaps.tasks`
+  default 2000 + `tasks` block doc); `templates.ts` (§4 → "Task tree" + budget key); `prompts/
+  checkpoint-writer.ts` (TASK GRAPH block + §4 reconcile instructions + arg); `checkpoint.ts`
+  (`buildTaskTree?` dep → `WriterJob.taskTree` from the FULL branch → prompt); `inject.ts`
+  (`## Open tasks` rebuild section + new placeholders); `index.ts` (import + the §4 closure +
+  the rebuild open-tasks computation). Both closures gated on the existing `config.tasks.enabled`.
+- **Live-verified end-to-end** via `scripts/smoke-todo-branch.sh` (rpiv-todo@1.19.1, pi 0.79.3):
+  the *shipped* `src/tasks.ts` renders the real §4 block from a live branch —
+  `- [in_progress] #1 probe task alpha (probing task alpha)` / `- [pending] #2 probe task beta`.
+- **Smoke + probe are KEPT** as permanent regression tooling (parallel to `scripts/smoke-subagents.sh`),
+  superseding the "throwaway" note in the §7.5 gate box. `scripts/probe-todo-branch.ts` imports the
+  shipped `src/tasks.ts` so the smoke exercises real code, not a copy.
+- **Still open (Option B / fidelity):** no `task_event` history log, no timestamps ⇒
+  `task_archive_days` intentionally not added, snapshot is session-scoped. Documented in README
+  divergence #6.
