@@ -60,14 +60,32 @@ function listMarkdownFiles(dir: string): string[] {
   return out;
 }
 
-/** Extracts metadata.type / type from a YAML frontmatter block (cc scope). */
+/** The Claude Code memory types we honor; anything else maps to "free". */
+const CC_TYPES = new Set(["feedback", "project", "reference", "user"]);
+
+/**
+ * Extract the Claude Code memory `type` from a YAML frontmatter block (cc scope).
+ *
+ * Real cc files put the type in one of several shapes, all handled here:
+ *   - top-level `type: project`
+ *   - block-nested `metadata:\n  type: reference` (the current convention)
+ *   - inline-flow `metadata: { type: user }`
+ *   - quoted values `type: "feedback"`
+ *
+ * The `(?:^|[\s,{])` boundary anchors to a line start, whitespace, comma, or
+ * brace so a standalone `type:` matches at any indent / inside a flow map, while
+ * `node_type:` / `*_type:` (preceded by a non-boundary char) never do. We scan
+ * EVERY candidate and return the first VALID memory type, so an unrelated or
+ * invalid `type:` appearing earlier in the block can't mask the real one (the
+ * old single-`.match()` grabbed only the first occurrence and gave up).
+ */
 export function ccTypeFromFrontmatter(body: string): string {
   const m = body.match(/^---\n([\s\S]*?)\n---/);
-  if (m) {
-    const fm = m[1]!;
-    const typeMatch = fm.match(/^\s*type:\s*["']?(\w+)["']?\s*$/m);
-    const t = typeMatch?.[1];
-    if (t === "feedback" || t === "project" || t === "reference" || t === "user") return t;
+  if (!m) return "free";
+  const re = /(?:^|[\s,{])type:\s*["']?([A-Za-z]+)["']?/gm;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(m[1]!)) !== null) {
+    if (CC_TYPES.has(match[1]!)) return match[1]!;
   }
   return "free";
 }

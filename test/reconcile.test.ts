@@ -133,8 +133,27 @@ test("reconcile indexes cc scope with frontmatter type when enabled", () => {
   fs.rmSync(ccRoot, { recursive: true, force: true });
 });
 
-test("ccTypeFromFrontmatter falls back to free", () => {
+test("ccTypeFromFrontmatter reads the type across all frontmatter shapes", () => {
+  // Block-nested metadata.type (the current cc convention) and top-level type.
   assert.equal(ccTypeFromFrontmatter("---\nmetadata:\n  type: reference\n---\nbody"), "reference");
+  assert.equal(ccTypeFromFrontmatter("---\nname: x\ntype: project\n---\nbody"), "project");
+  // Quoted value, with node_type + a trailing key (real files carry originSessionId).
+  assert.equal(
+    ccTypeFromFrontmatter('---\nmetadata:\n  node_type: memory\n  type: "user"\n  originSessionId: abc\n---\n'),
+    "user",
+  );
+  // Inline-flow metadata — previously fell through to "free".
+  assert.equal(ccTypeFromFrontmatter("---\nmetadata: { node_type: memory, type: feedback }\n---\n"), "feedback");
+  // An earlier unrelated/invalid `type:` must NOT mask a valid metadata.type below it.
+  assert.equal(
+    ccTypeFromFrontmatter("---\nschema:\n  type: object\nmetadata:\n  type: project\n---\n"),
+    "project",
+  );
+  // node_type alone is not a memory type — no false match.
+  assert.equal(ccTypeFromFrontmatter("---\nmetadata:\n  node_type: memory\n---\n"), "free");
+});
+
+test("ccTypeFromFrontmatter falls back to free", () => {
   assert.equal(ccTypeFromFrontmatter("---\ntitle: x\n---\nbody"), "free");
   assert.equal(ccTypeFromFrontmatter("no frontmatter at all"), "free");
   assert.equal(ccTypeFromFrontmatter("---\nmetadata:\n  type: exotic\n---\n"), "free");
