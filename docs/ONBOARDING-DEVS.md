@@ -336,9 +336,9 @@ Things to know:
 - **Auto-pass scheduling lives in `meta`** (`last_dream_at:<pid>`, `last_distill_at:<pid>`),
   not session titles. The **first sighting of a project sets the clock** rather than running
   immediately — no surprise dream on a fresh install.
-- **`dream.auto` defaults on (7d); `distill.auto` defaults off (30d).** Distill creates
-  skills/extensions, which is more invasive than editing Markdown — a deliberate divergence
-  from MiMoCode, kept manual unless opted in.
+- **`dream.auto` defaults on (7d); `distill.auto` defaults on (30d)** — both match MiMoCode.
+  Distill creates skills/extensions, which is more invasive than editing Markdown, so it stays
+  easy to opt out of (`"distill": { "auto": false }`), but it is no longer off by default.
 - **Honest result reporting** (`reportPassResult`): a dream's effect is read from the
   reconcile index diff (it edited Markdown); a distill's effect is the set of asset files
   that newly exist between a *before* snapshot (captured at spawn) and an *after* snapshot —
@@ -504,7 +504,7 @@ Documented in full in the README; the load-bearing ones for a developer:
    rebuild). pi sessions may never compact, so we always carry the small upper layers; the
    text is stable so the prompt cache stays warm.
 2. **Window-scaled `"auto"` thresholds** (matches MiMo: every 20% ≤200K, 10% to 500K, 5% beyond); a flat array like `[20,40,60,80]` opts out.
-3. **Distill auto-off by default** (creating assets is invasive).
+3. ~~**Distill auto-off by default.**~~ **Distill auto-on (30d), matching MiMoCode** — opt out with `"distill": { "auto": false }`.
 4. **No preStop validators in v1** — the writer prompt's budget text and dream's prune phase
    carry that pressure instead.
 5. **In-process writer fed an inlined delta** (`createAgentSession` +

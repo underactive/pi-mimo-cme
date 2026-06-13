@@ -225,7 +225,7 @@ memory files indexed: sessions=2 projects=1
 history rows: 240 total, 240 this project
 db: /Users/you/.pi/agent/pi-mimo-cme/memory.db (148.0 KB)
 last dream: never (auto=true, every 7d)
-last distill: never (auto=false, every 30d)
+last distill: never (auto=true, every 30d)
 
 session  s_abc123
   checkpoint: /Users/you/.pi/agent/pi-mimo-cme/sessions/s_abc123/checkpoint.md
@@ -345,8 +345,8 @@ Create `~/.pi/agent/pi-mimo-cme/config.json`. Anything you omit keeps its defaul
     "kinds": ["user_text", "assistant_text", "tool_input", "tool_error"]
   },
   "memory": { "ccIndex": false },     // also index ~/.claude/projects/*/memory (Claude Code memory)
-  "dream":   { "auto": true,  "intervalDays": 7 },   // consolidation: on, weekly
-  "distill": { "auto": false, "intervalDays": 30 }   // workflow packaging: off by default
+  "dream":   { "auto": true, "intervalDays": 7 },   // consolidation: on, weekly
+  "distill": { "auto": true, "intervalDays": 30 }   // workflow packaging: on, monthly
 }
 ```
 
@@ -354,9 +354,10 @@ A few notes:
 
 - **`thresholds`** controls how often your session is snapshotted. Lower numbers =
   checkpoints earlier and more often (safer, slightly more background work).
-- **`dream.auto` is on**; **`distill.auto` is off** on purpose — consolidating Markdown is
-  safe to do unattended, but *creating new skills/extensions* is invasive, so distill waits
-  for you to ask with `/distill`.
+- **`dream.auto` and `distill.auto` are both on** (matching MiMoCode). Dream consolidates
+  Markdown weekly; distill packages recurring workflows into skills/extensions monthly. Distill
+  *creates new assets* unattended — if that's too eager, set `"distill": { "auto": false }` and
+  run it yourself with `/distill`.
 - The interval clock starts the **first time** the extension sees a project, so a fresh
   install won't surprise-run a dream pass on day one.
 

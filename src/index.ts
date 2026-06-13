@@ -444,7 +444,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
         }
       }, 0);
 
-      // Auto evolution passes (dream default on / distill default off).
+      // Auto evolution passes (both default on, matching MiMoCode; gated by interval + auto flag).
       if (event.reason === "startup" || event.reason === "new") {
         maybeAutoPass(ctx, "dream");
         maybeAutoPass(ctx, "distill");

@@ -240,7 +240,8 @@ Same dual mode with MiMoCode's distill.txt structure (research §8.3): inventory
 assets under `~/.pi/agent/skills/`, `~/.pi/agent/extensions/`, project `.pi/`; "at least
 twice or clearly likely to recur"; smallest-form ladder retargeted to pi assets (pi
 skills / slash commands as extensions / playbook in MEMORY.md ## Patterns); "Created
-nothing ... is a complete, successful result". Interval 30d. Manual `/distill`.
+nothing ... is a complete, successful result". Interval 30d, auto-on by default (matches
+MiMoCode); also a manual `/distill`.
 
 ### 5.3 Promotion ladder & forgetting
 
@@ -297,7 +298,7 @@ README.md           # what/why, CME mapping, four layers, install, config, diver
   "history": { "kinds": ["user_text", "assistant_text", "tool_input", "tool_error"] },
   "memory":  { "ccIndex": false },     // index ~/.claude/projects/*/memory as scope "cc"
   "dream":   { "auto": true,  "intervalDays": 7 },
-  "distill": { "auto": false, "intervalDays": 30 }
+  "distill": { "auto": true, "intervalDays": 30 }
 }
 ```
 

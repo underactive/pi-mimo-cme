@@ -70,7 +70,7 @@ export const DEFAULT_CONFIG: CmeConfig = {
   memory: { ccIndex: false },
   tasks: { enabled: true },
   dream: { auto: true, intervalDays: 7 },
-  distill: { auto: false, intervalDays: 30 },
+  distill: { auto: true, intervalDays: 30 },
 };
 
 export function loadConfig(root: string): CmeConfig {

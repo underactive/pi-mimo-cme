@@ -14,7 +14,7 @@ concrete machinery:
 |---|---|---|
 | **Computation** | single-turn decision quality | injects memory instructions + project/global memory into the system prompt every turn; `memory` tool (BM25 recall with a relative score floor); `history` tool as the escalation target; zero-hit escalation ladder |
 | **Memory** | multi-turn continuity | `notes.md` scratchpad (taught, guarded); window-scaled context-usage thresholds (`"auto"`: every 20%/10%/5%) fire an in-process checkpoint-writer session; one-shot checkpoint dump after resume / fork / compaction; 70%/85% memory-flush nudges |
-| **Evolution** | cross-session improvement | `dream` pass (consolidate, dedupe, prune — auto every 7 days) and `distill` pass (package repeated workflows into pi skills/commands — manual by default) |
+| **Evolution** | cross-session improvement | `dream` pass (consolidate, dedupe, prune — auto every 7 days) and `distill` pass (package repeated workflows into pi skills/commands — auto every 30 days) |
 
 Hierarchy principle (MiMoCode): *"the upper layers are more refined, more persistent,
 and smaller; the lower layers are more complete, larger, and slower."*
@@ -108,7 +108,7 @@ constrained by a path guard that allows only `sessions/<sid>/notes.md` and
   },
   "memory": { "ccIndex": false },     // index ~/.claude/projects/*/memory as scope "cc"
   "dream":   { "auto": true,  "intervalDays": 7 },
-  "distill": { "auto": false, "intervalDays": 30 }
+  "distill": { "auto": true, "intervalDays": 30 }
 }
 ```
 
@@ -148,9 +148,11 @@ Deliberate adaptations, in roughly decreasing order of consequence:
    model's context window — every 20% ≤200K, every 10% to 500K, every 5% beyond — so
    big-context models (e.g. 1M windows) checkpoint ~4× finer than a flat schedule. Pin a
    flat array (e.g. `[20, 40, 60, 80]`) to opt out and ignore the window.
-3. **Distill auto-runs are off by default.** MiMoCode auto-distills every 30 days.
-   Creating skills/extensions unprompted is more invasive than editing memory files, so
-   `/distill` is manual unless you set `"distill": { "auto": true }`.
+3. **~~Distill auto-runs are off by default.~~ Distill auto-runs every 30 days (now matches
+   MiMoCode).** Like MiMoCode, the distill pass runs automatically on the first prompt of a
+   session once a project is ≥30 days old, packaging recurring workflows into skills/commands.
+   It writes executable assets unprompted — set `"distill": { "auto": false }` to keep it
+   manual (`/distill`) if that's too eager for a given project.
 4. **No preStop validators in v1.** MiMoCode validates the writer's output (section
    structure, budgets) and forces reflection-retries. Here the writer prompt's budget
    text and dream's prune phase carry that pressure alone.
