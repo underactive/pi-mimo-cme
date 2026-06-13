@@ -6,6 +6,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { CmeConfig } from "./config.ts";
 import { metaGet } from "./db.ts";
+import type { FooterCounts } from "./footer-counts.ts";
 import { memorySearch } from "./fts.ts";
 import {
   agentDir,
@@ -24,6 +25,12 @@ export interface CommandDeps {
   db: DatabaseSync;
   root: string;
   config: CmeConfig;
+  /**
+   * Cached footer counters (phase 1). Optional: prompt-building call sites
+   * (maybeAutoPass) don't need it, but any path that reconciles must reseed it
+   * so the live footer stays exact (invariant #4). See reconcileAndNotify.
+   */
+  counts?: FooterCounts;
   /** UI toast, no-op without a UI (see index.ts notify shim). */
   notify?: (message: string, level?: "info" | "warning" | "error") => void;
 }
@@ -61,6 +68,10 @@ export function reconcileAndNotify(deps: CommandDeps): void {
   const stats = reconcile(deps.db, { root: deps.root, ccIndex: deps.config.memory.ccIndex });
   lastReconcileAt.set(deps.db, Date.now());
   if (stats.indexed === 0 && stats.removed === 0) return; // nothing changed on disk — stay quiet
+  // memory_fts moved during the turn — reseed the cached footer so the turn_end
+  // backstop refresh shows the new idx count (invariant #4). Exact, off the hot
+  // path (only fires on a search that actually re-indexed something).
+  deps.counts?.reseedMemory(deps.db);
   const parts = [`${stats.indexed} indexed`];
   if (stats.removed > 0) parts.push(`${stats.removed} removed`);
   deps.notify?.(`🔄 mimo-cme: memory indexed — ${parts.join(", ")}`);

@@ -6,6 +6,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { CmeConfig } from "./config.ts";
+import type { FooterCounts } from "./footer-counts.ts";
 import {
   AROUND_MAX_BYTES,
   historyAround,
@@ -21,6 +22,8 @@ export interface ToolDeps {
   db: DatabaseSync;
   root: string;
   config: CmeConfig;
+  /** Cached footer counters (phase 1); the memory tool's reconcile reseeds it. */
+  counts?: FooterCounts;
   /** UI toast, no-op without a UI (see index.ts notify shim). */
   notify?: (message: string, level?: "info" | "warning" | "error") => void;
 }

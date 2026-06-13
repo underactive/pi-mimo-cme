@@ -1,6 +1,6 @@
 # Scaling & Retention Plan
 
-Status: proposed · Target: post-v1 hardening · Owner: TBD
+Status: phase 1 shipped ✅ · phases 2–4 proposed · Target: post-v1 hardening · Owner: TBD
 
 This plan addresses the four growth/latency vectors identified in the capacity
 review of pi-mimo-cme's storage. None are urgent for a single project in normal
@@ -11,7 +11,7 @@ The four are tackled **sequentially**, in dependency order:
 
 | # | Phase | Kind | Why this order | Schema change | Default behavior |
 |---|-------|------|----------------|---------------|------------------|
-| 1 | Cached footer counters | Perf, DB-only | Independent; highest-value; establishes the counter infra phases 2–3 must keep in sync | none | identical output, no per-turn `COUNT(*)` |
+| 1 ✅ | Cached footer counters | Perf, DB-only | Independent; highest-value; establishes the counter infra phases 2–3 must keep in sync | none | identical output, no per-turn `COUNT(*)` |
 | 2 | `history_fts` retention prune | Data size, DB-only | Establishes retention config + dream-completion prune hook + FTS-delete discipline that phase 3 reuses | none | **OFF** (unlimited) |
 | 3 | GC consolidated session folders | Data size, file + DB | Reuses phase 2's retention infra + reconcile's existing vanished-file prune; riskiest (deletes files) so it follows the proven DB-only prune | none | **OFF** (keep all) |
 | 4 | Scope/cache reconcile's walk | Perf, file scan | Pure optimization, no data semantics; benefits compound once phases 2–3 manage session count | none | identical output, fewer `statSync`s |
@@ -41,7 +41,16 @@ These are non-negotiable; a phase that violates one is wrong even if its tests p
 
 ---
 
-## Phase 1 — Decouple the footer from table size (cached counters)
+## Phase 1 — Decouple the footer from table size (cached counters) ✅ COMPLETE
+
+> **Status: complete.** Shipped as `src/footer-counts.ts` (the `FooterCounts`
+> class) + `test/footer-counts.test.ts`. `refreshStatus` now reads the cached
+> struct and issues zero SQL per turn; counters are seeded at `session_start`,
+> incremented by `addHistory` on the live-index/backfill paths, and reseeded via
+> `reseedMemory` after every reconcile — including the in-turn reconcile in
+> `reconcileAndNotify` (the third call site, required by invariant #4 so the
+> `turn_end` backstop footer stays exact). `reseedHistory` exists but is unused
+> until phases 2–3 prune. `tsc --noEmit` clean, full suite green (53 tests).
 
 ### Problem
 `refreshStatus` (`src/index.ts:142-147`) runs two `COUNT(*)` on **every**

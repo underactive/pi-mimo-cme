@@ -21,6 +21,7 @@ import {
 } from "./commands.ts";
 import { loadConfig } from "./config.ts";
 import { metaGet, metaSet, openDb } from "./db.ts";
+import { FooterCounts } from "./footer-counts.ts";
 import { checkMemoryWrite } from "./guard.ts";
 import { backfillProject, HistoryIndexer } from "./history.ts";
 import { buildRebuildDump, buildSystemPromptAppendix } from "./inject.ts";
@@ -98,6 +99,11 @@ export default function piMimoCme(pi: ExtensionAPI) {
   }
 
   const indexer = new HistoryIndexer(db, config.history.kinds);
+  // Cached footer counters (phase 1): seeded per session_start, mutated by pure
+  // arithmetic on the hot path, reseeded after the infrequent reconcile. Shared
+  // across the factory's reconcile call sites (here + reconcileAndNotify) so the
+  // footer stays exact however memory_fts changed mid-turn. See footer-counts.ts.
+  const counts = new FooterCounts();
   const checkpoints = new CheckpointManager({
     db,
     root,
@@ -128,22 +134,18 @@ export default function piMimoCme(pi: ExtensionAPI) {
    *   idx  = rows in memory_fts  — every indexed memory layer (global/project/
    *          session markdown); the agent's recallable knowledge, global.
    *   hist = rows in history_fts for THIS project — the layer-4 capture.
-   * memory_fts is small and history_fts is project-indexed, so the two
-   * COUNT(*)s are cheap enough to run per message/turn. No-op without a UI
-   * (-p / json modes). Reusing the "mimo-cme" key overwrites the footer in
-   * place, which is what makes it update live rather than stacking entries.
+   * Phase 1: both numbers come from the in-memory `counts` cache, NOT a live
+   * COUNT(*). `history_fts WHERE project_id` was an index range scan that grew
+   * with the table; per turn that is now two integer reads and zero SQL. The
+   * cache is seeded at session_start and kept current by `addHistory` (inserts)
+   * and `reseedMemory` (reconcile). No-op without a UI (-p / json modes).
+   * Reusing the "mimo-cme" key overwrites the footer in place, which is what
+   * makes it update live rather than stacking entries.
    */
-  // Prepared once per session and reused: node:sqlite recompiles SQL on every
-  // prepare(), and these two counts fire on every message_end AND turn_end.
-  const countMemoryRows = db.prepare("SELECT COUNT(*) AS n FROM memory_fts");
-  const countProjectHistoryRows = db.prepare(
-    "SELECT COUNT(*) AS n FROM history_fts WHERE project_id = ?",
-  );
   function refreshStatus(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
-    const idx = (countMemoryRows.get() as { n: number }).n;
-    const hist = (countProjectHistoryRows.get(projectId(ctx.cwd)) as { n: number }).n;
-    ctx.ui.setStatus("mimo-cme", `🧠 ${idx} idx · ${hist} hist`);
+    const { memIdx, projHist } = counts.snapshot();
+    ctx.ui.setStatus("mimo-cme", `🧠 ${memIdx} idx · ${projHist} hist`);
   }
 
   /**
@@ -197,6 +199,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
   function reportPassResult(cwd: string, pass: "dream" | "distill", before: Set<string> | undefined): void {
     if (pass === "dream") {
       const stats = reconcile(db, { root, ccIndex: config.memory.ccIndex });
+      counts.reseedMemory(db); // reconcile mutated memory_fts — keep the cached footer exact (invariant #4)
       if (stats.indexed === 0 && stats.removed === 0) {
         notify("🧠 mimo-cme: dream complete — no memory changes");
       } else {
@@ -302,7 +305,10 @@ export default function piMimoCme(pi: ExtensionAPI) {
             sidOf(ctx),
           );
           if (stats.files > 0) log(`backfill: ${stats.rows} rows from ${stats.files} session files`);
-          if (stats.rows > 0) refreshStatus(ctx); // backfill grew hist — update footer
+          if (stats.rows > 0) {
+            counts.addHistory(stats.rows); // backfill inserted history rows — bump the cached count
+            refreshStatus(ctx); // backfill grew hist — update footer
+          }
         } catch (err) {
           reportError("backfill", err);
         }
@@ -314,6 +320,10 @@ export default function piMimoCme(pi: ExtensionAPI) {
         maybeAutoPass(ctx, "distill");
       }
 
+      // Seed the cached footer counters once from COUNT(*), then the per-turn
+      // paths only do arithmetic. Reseeding every session_start is also the
+      // self-heal: any drift from a prior session starts fresh here.
+      counts.seed(db, projectId(ctx.cwd));
       refreshStatus(ctx); // initial footer (backfill above refreshes again once it lands)
     }),
   );
@@ -362,7 +372,10 @@ export default function piMimoCme(pi: ExtensionAPI) {
     "message_end",
     safe("message_end", (event, ctx) => {
       const added = indexer.indexMessage(sidOf(ctx), projectId(ctx.cwd), event.message);
-      if (added > 0) refreshStatus(ctx); // hist ticked up — update footer live
+      if (added > 0) {
+        counts.addHistory(added); // pure arithmetic on the hot path — no per-turn COUNT(*)
+        refreshStatus(ctx); // hist ticked up — update footer live
+      }
     }),
   );
 
@@ -413,7 +426,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
     }),
   );
 
-  registerMemoryTool(pi, { db, root, config, notify });
-  registerHistoryTool(pi, { db, root, config, notify });
-  registerCommands(pi, { db, root, config, notify });
+  registerMemoryTool(pi, { db, root, config, counts, notify });
+  registerHistoryTool(pi, { db, root, config, counts, notify });
+  registerCommands(pi, { db, root, config, counts, notify });
 }
