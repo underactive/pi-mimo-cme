@@ -222,7 +222,9 @@ export function isCheckpointEmpty(text: string | undefined): boolean {
       t === "(none yet)" ||
       t === "(none)" ||
       t === "(no task registry)" ||
-      t === "(no subagents this session)"
+      t === "(no subagents this session)" ||
+      t === "(no tasks or subagents this session)" ||
+      t === "(no tasks this session)"
     )
       continue;
     if (t.startsWith("#")) continue;
@@ -236,7 +238,11 @@ export function isCheckpointEmpty(text: string | undefined): boolean {
  * One-shot rebuild dump (resume / fork / post-compaction). Project and global
  * memory are NOT here — they ride in the system prompt every turn.
  */
-export function buildRebuildDump(db: DatabaseSync, ctx: InjectContext): string | undefined {
+export function buildRebuildDump(
+  db: DatabaseSync,
+  ctx: InjectContext,
+  taskTree?: string,
+): string | undefined {
   const cpPath = checkpointPath(ctx.sid, ctx.root);
   let checkpointRaw: string | undefined;
   try {
@@ -256,6 +262,11 @@ export function buildRebuildDump(db: DatabaseSync, ctx: InjectContext): string |
     dumped.add(nPath);
     sections.push(`## Session notes\n\n${notes.trimEnd()}`);
   }
+  // Open tasks (plan §7). The still-actionable slice of the @juicesharp/rpiv-todo
+  // task graph (in_progress + pending), rendered by the caller from the live
+  // branch snapshot — the broader frame, so it sits above the subagents. Empty
+  // string ⇒ rpiv-todo absent / no open tasks ⇒ section omitted.
+  if (taskTree && taskTree.trim()) sections.push(`## Open tasks\n\n${taskTree.trim()}`);
   // In-flight subagents (Phase 2). Non-terminal actors only — on a same-process
   // compaction these are genuinely still running; on a cross-process resume the
   // ledger reaps stale rows at session_start, so this is empty and omitted.

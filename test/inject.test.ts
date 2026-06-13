@@ -80,10 +80,36 @@ test("buildRebuildDump surfaces in-flight actors under ## Active actors", () => 
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test("isCheckpointEmpty treats the §4 subagents placeholder as empty", () => {
+test("buildRebuildDump surfaces open tasks above active actors, omits when empty", () => {
+  const root = tempRoot();
+  const db = openDb(":memory:");
+  const pid = "abc123";
+  write(root, "sessions/s1/checkpoint.md", '# Session checkpoint\n\n## §1 Active intent\n> "do the thing"\n');
+  const ctx: InjectContext = { root, sid: "s1", pid, caps: DEFAULT_CONFIG.checkpoint.pushCaps };
+
+  const openTasks = "- [in_progress] #2 build the thing\n- [pending] #3 test it";
+  const dump = buildRebuildDump(db, ctx, openTasks)!;
+  assert.match(dump, /## Open tasks\n\n- \[in_progress\] #2 build the thing/);
+  // Task tree is the broader frame → appears above the (here empty) actors slot
+  // and below the session checkpoint.
+  assert.ok(dump.indexOf("## Session checkpoint") < dump.indexOf("## Open tasks"));
+
+  // Empty/undefined task string → section omitted.
+  assert.doesNotMatch(buildRebuildDump(db, ctx, "")!, /## Open tasks/);
+  assert.doesNotMatch(buildRebuildDump(db, ctx)!, /## Open tasks/);
+
+  db.close();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("isCheckpointEmpty treats the §4 placeholders as empty", () => {
   assert.equal(isCheckpointEmpty(undefined), true);
   assert.equal(
     isCheckpointEmpty("# Session checkpoint\n\n## §4 Subagents\n(no subagents this session)\n"),
+    true,
+  );
+  assert.equal(
+    isCheckpointEmpty("# Session checkpoint\n\n## §4 Task tree\n(no tasks or subagents this session)\n"),
     true,
   );
   assert.equal(

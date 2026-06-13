@@ -12,6 +12,8 @@ export interface PushCaps {
   memoryKeys: number;
   /** Token cap for the actor ledger views (writer §4 block + rebuild "Active actors"). */
   actors: number;
+  /** Token cap for the task-graph views (writer §4 TASK GRAPH block + rebuild "Open tasks"). */
+  tasks: number;
 }
 
 export interface CmeConfig {
@@ -40,10 +42,13 @@ export interface CmeConfig {
   history: { kinds: string[] };
   memory: { ccIndex: boolean };
   /**
-   * Phase 2 subagent/actor layer. When enabled (default), the extension
-   * observes pi-subagents lifecycle events, records an actor ledger, and writes
-   * per-actor progress.md journals. A soft dependency: with pi-subagents absent
-   * the ledger simply stays empty. Set false to opt out of the wiring entirely.
+   * Subagent/actor + user-task-graph layer. When enabled (default), the
+   * extension (a) observes pi-subagents lifecycle events → actor ledger +
+   * per-actor progress.md journals, and (b) reads the @juicesharp/rpiv-todo task
+   * snapshot from the session branch → checkpoint §4 "Task tree" + the rebuild
+   * "Open tasks" section. Both are SOFT dependencies: with pi-subagents absent
+   * the ledger stays empty, and with rpiv-todo absent the task tree stays empty.
+   * Set false to opt out of all of it.
    */
   tasks: { enabled: boolean };
   dream: { auto: boolean; intervalDays: number };
@@ -64,6 +69,7 @@ export const DEFAULT_CONFIG: CmeConfig = {
       notes: 6_000,
       memoryKeys: 500,
       actors: 2_000,
+      tasks: 2_000,
     },
   },
   history: { kinds: ["user_text", "assistant_text", "tool_input", "tool_error"] },

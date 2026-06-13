@@ -1,8 +1,8 @@
 /**
  * File templates (from MiMoCode's checkpoint-templates.ts) and section token
- * budgets. checkpoint.md keeps all 11 sections; §4 tracks subagent/actor
- * activity (Phase 2) rather than MiMoCode's user task graph, which pi has no
- * registry for.
+ * budgets. checkpoint.md keeps all 11 sections; §4 "Task tree" carries the user
+ * task graph (read from the @juicesharp/rpiv-todo snapshot on the session branch)
+ * plus subagent/actor activity under a ### Subagents sub-block (plan §7).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -21,8 +21,8 @@ _Concrete next step, with verbatim quote when possible._
 _Session-specific working style only. Project-wide rules belong in MEMORY.md ## Rules._
 (none yet)
 
-## §4 Subagents
-_Subagent/actor activity this session (id · type · status — one-line result), reconciled from the actor ledger. Never invent actor IDs. Render "(no subagents this session)" when none ran._
+## §4 Task tree
+_User task graph (from the todo tool) reconciled from the TASK GRAPH block — one line per task "- [status] #id subject" — followed by a "### Subagents" sub-block reconciled from the SUBAGENT PROGRESS block "- id · type · status — result". Use task and actor IDs EXACTLY as given; never invent them. Render "(no tasks or subagents this session)" when both blocks are empty._
 (none yet)
 
 ## §5 Current work
@@ -79,7 +79,7 @@ export const CHECKPOINT_SECTION_BUDGETS: Record<string, number> = {
   "§1 Active intent": 500,
   "§2 Next concrete action": 1000,
   "§3 Directives (this session)": 800,
-  "§4 Subagents": 1000,
+  "§4 Task tree": 1000,
   "§5 Current work": 2000,
   "§6 Files and code sections": 1500,
   "§7 Discovered knowledge (cross-task)": 2000,

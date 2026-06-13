@@ -231,6 +231,67 @@ test("CheckpointManager: omits subagent progress when no builder is wired (rende
   fs.rmSync(agent, { recursive: true, force: true });
 });
 
+test("CheckpointManager: inlines the TASK GRAPH block from the full branch", async () => {
+  const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cptg-"));
+  const root = path.join(agent, "pi-mimo-cme");
+  const db = openDb(":memory:");
+  const calls: WriterRequest[] = [];
+  let sawMessages = 0;
+  const manager = new CheckpointManager({
+    db,
+    root,
+    thresholds: [20],
+    maxWriterFailures: 3,
+    log: () => {},
+    // The task source receives the FULL branch (not just the delta slice).
+    buildTaskTree: (messages) => {
+      sawMessages = messages.length;
+      return "- [in_progress] #1 wire the task tree";
+    },
+    runWriter: async (req) => {
+      calls.push(req);
+      return { ok: true } satisfies WriterResult;
+    },
+  });
+  manager.fireCheckpoint({
+    sid: "s1",
+    pid: "p1",
+    cwd: "/w",
+    messages: [{ role: "user", content: "go" }, { role: "assistant", content: [] }],
+  });
+  await manager.waitForIdle(1000);
+  assert.equal(sawMessages, 2, "buildTaskTree sees the whole branch");
+  assert.ok(calls[0]!.prompt.includes("BEGIN TASK GRAPH"));
+  assert.ok(calls[0]!.prompt.includes("- [in_progress] #1 wire the task tree"));
+  // No task builder elsewhere → subagents still render their own placeholder.
+  assert.ok(calls[0]!.prompt.includes("(no subagents this session)"));
+  db.close();
+  fs.rmSync(agent, { recursive: true, force: true });
+});
+
+test("CheckpointManager: renders the no-tasks placeholder when no task builder is wired", async () => {
+  const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cptg0-"));
+  const root = path.join(agent, "pi-mimo-cme");
+  const db = openDb(":memory:");
+  const calls: WriterRequest[] = [];
+  const manager = new CheckpointManager({
+    db,
+    root,
+    thresholds: [20],
+    maxWriterFailures: 3,
+    log: () => {},
+    runWriter: async (req) => {
+      calls.push(req);
+      return { ok: true } satisfies WriterResult;
+    },
+  });
+  manager.fireCheckpoint({ sid: "s1", pid: "p1", cwd: "/w", messages: [{ role: "user", content: "go" }] });
+  await manager.waitForIdle(1000);
+  assert.ok(calls[0]!.prompt.includes("(no tasks this session)"));
+  db.close();
+  fs.rmSync(agent, { recursive: true, force: true });
+});
+
 test("CheckpointManager: records writer token usage + parent context per run", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpm-"));
   const root = path.join(agent, "pi-mimo-cme");

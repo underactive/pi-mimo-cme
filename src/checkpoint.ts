@@ -178,6 +178,14 @@ export interface CheckpointDeps {
    * sees an empty block and §4 renders "(no subagents this session)".
    */
   buildSubagentProgress?: (sid: string) => string;
+  /**
+   * Builds the inlined TASK GRAPH block (checkpoint §4 source) from the session
+   * branch's latest @juicesharp/rpiv-todo snapshot. Takes the branch messages
+   * (not a sid) because the task state lives in the conversation, not our DB.
+   * Optional/injected like buildSubagentProgress; absent (tasks layer off /
+   * rpiv-todo unused) ⇒ empty block ⇒ §4 falls back to the no-tasks placeholder.
+   */
+  buildTaskTree?: (messages: unknown[]) => string;
   log: (message: string) => void;
   /**
    * Optional UI toast. The writer runs in a headless in-process session with
@@ -204,6 +212,12 @@ interface WriterJob {
   cwd: string;
   /** Serialized conversation delta, inlined into the writer prompt. */
   delta: string;
+  /**
+   * The §4 TASK GRAPH block, rendered from the FULL branch (not the delta) at
+   * fire time — the latest todo snapshot is cumulative, so reading only the
+   * delta would drop tasks created before this checkpoint's window.
+   */
+  taskTree: string;
   /** Branch message count at serialization time — becomes last_checkpoint_seq. */
   messageCount: number;
   /** Parent context size when this checkpoint fired (for Phase 3 profiling). */
@@ -297,6 +311,8 @@ export class CheckpointManager {
       pid: args.pid,
       cwd: args.cwd,
       delta: serializeDelta(delta),
+      // Read the task snapshot from the FULL branch, not the delta slice.
+      taskTree: this.deps.buildTaskTree?.(args.messages) ?? "",
       messageCount: args.messages.length,
       parentTokens: args.parentContext?.tokens ?? null,
       parentContextWindow: args.parentContext?.contextWindow ?? 0,
@@ -334,6 +350,7 @@ export class CheckpointManager {
         notesPath: notesPath(job.sid, root),
         delta: job.delta,
         subagentProgress: this.deps.buildSubagentProgress?.(job.sid) ?? "",
+        taskTree: job.taskTree,
       });
       const result = await this.deps.runWriter({ prompt, cwd: job.cwd });
       this.recordMetrics(job, result.ok, result.metrics);

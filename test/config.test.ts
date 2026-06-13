@@ -2,10 +2,18 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULT_CONFIG, mergeConfig } from "../src/config.ts";
 
-test("DEFAULT_CONFIG enables the tasks layer and budgets the actor views", () => {
+test("DEFAULT_CONFIG enables the tasks layer and budgets the actor + task views", () => {
   assert.equal(DEFAULT_CONFIG.tasks.enabled, true);
   assert.equal(typeof DEFAULT_CONFIG.checkpoint.pushCaps.actors, "number");
   assert.ok(DEFAULT_CONFIG.checkpoint.pushCaps.actors > 0);
+  assert.equal(typeof DEFAULT_CONFIG.checkpoint.pushCaps.tasks, "number");
+  assert.ok(DEFAULT_CONFIG.checkpoint.pushCaps.tasks > 0);
+});
+
+test("mergeConfig honors a custom tasks push cap; the merge loop auto-picks it up", () => {
+  const merged = mergeConfig(DEFAULT_CONFIG, { checkpoint: { pushCaps: { tasks: 750 } } });
+  assert.equal(merged.checkpoint.pushCaps.tasks, 750);
+  assert.equal(merged.checkpoint.pushCaps.actors, DEFAULT_CONFIG.checkpoint.pushCaps.actors);
 });
 
 test("DEFAULT_CONFIG scales thresholds with the window by default", () => {

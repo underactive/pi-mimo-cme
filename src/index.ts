@@ -32,6 +32,7 @@ import { backfillProject, HistoryIndexer } from "./history.ts";
 import { buildRebuildDump, buildSystemPromptAppendix } from "./inject.ts";
 import { agentDir, dbPath, logsDir, memoryRoot, projectId, sessionsJsonlDir } from "./paths.ts";
 import { reconcile } from "./reconcile.ts";
+import { buildTaskTree, readTaskSnapshot } from "./tasks.ts";
 import { registerHistoryTool, registerMemoryTool } from "./tools.ts";
 
 /** argv prefix to re-invoke pi for the dream/distill subprocesses. */
@@ -225,6 +226,12 @@ export default function piMimoCme(pi: ExtensionAPI) {
     // when the tasks layer is off, so the writer renders §4 as "(none)".
     buildSubagentProgress: config.tasks.enabled
       ? (sid) => buildSubagentProgress(db, sid, config.checkpoint.pushCaps.actors)
+      : undefined,
+    // §4 Task tree source: the rpiv-todo snapshot read from the branch messages
+    // (the full branch, passed by fireCheckpoint). Soft — empty when rpiv-todo
+    // is unused, so §4 renders "(no tasks ...)". Same gate as the actor source.
+    buildTaskTree: config.tasks.enabled
+      ? (messages) => buildTaskTree(readTaskSnapshot(messages), config.checkpoint.pushCaps.tasks)
       : undefined,
     log,
     notify,
@@ -481,7 +488,15 @@ export default function piMimoCme(pi: ExtensionAPI) {
     safe("inject_rebuild", (_event, ctx) => {
       if (!pendingRebuild) return;
       pendingRebuild = false;
-      const dump = buildRebuildDump(db, injectCtx(ctx));
+      // Open tasks (in_progress + pending) from the live rpiv-todo snapshot on
+      // the branch — surfaced so a resumed session sees its still-actionable
+      // todos even if they postdate the last checkpoint. Soft/gated like §4.
+      const openTasks = config.tasks.enabled
+        ? buildTaskTree(readTaskSnapshot(branchMessages(ctx)), config.checkpoint.pushCaps.tasks, {
+            openOnly: true,
+          })
+        : "";
+      const dump = buildRebuildDump(db, injectCtx(ctx), openTasks);
       if (dump === undefined) return; // checkpoint absent or all "(none yet)" — skip silently
       return { message: { customType: "mimo-cme:rebuild", content: dump, display: true } };
     }),

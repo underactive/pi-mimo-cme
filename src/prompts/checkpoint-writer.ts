@@ -4,10 +4,11 @@
  * - the conversation source is the delta INLINED at the end of the prompt (the
  *   writer runs as a fresh in-process pi SDK session with no live history, so
  *   the delta is handed over directly rather than via a `delta-<n>.md` file);
- * - §4 Subagents is reconciled from a SUBAGENT PROGRESS block (Phase 2),
- *   likewise inlined — sourced from the actor ledger, which observes
- *   pi-subagents lifecycle events. When no subagents ran it renders
- *   "(no subagents this session)";
+ * - §4 Task tree is reconciled from two inlined blocks: a TASK GRAPH block (the
+ *   user task graph, read from the @juicesharp/rpiv-todo snapshot on the session
+ *   branch) and a SUBAGENT PROGRESS block (actor ledger, from pi-subagents
+ *   lifecycle events). When both are empty it renders
+ *   "(no tasks or subagents this session)";
  * - everything else (11 sections, §1 verbatim anchor, COMMITMENT vs INSPECTION,
  *   EXACT-FORM CONSTRAINT LITERAL, section budgets, spillover, notes wipe)
  *   preserved.
@@ -21,12 +22,19 @@ export interface WriterPromptArgs {
   /** Serialized conversation delta, inlined into the prompt as the writer's sole source. */
   delta: string;
   /**
-   * Condensed subagent/actor activity for this session, inlined as the source
-   * for checkpoint §4. Empty string when no subagents ran (or the tasks layer is
-   * off / pi-subagents absent), in which case §4 is rendered as
-   * "(no subagents this session)".
+   * Condensed subagent/actor activity for this session, inlined as the
+   * ### Subagents source for checkpoint §4. Empty string when no subagents ran
+   * (or the tasks layer is off / pi-subagents absent).
    */
   subagentProgress: string;
+  /**
+   * The user task graph for this session (from the @juicesharp/rpiv-todo
+   * snapshot), inlined as the TASK GRAPH source for checkpoint §4. Empty string
+   * when no tasks exist (or the tasks layer is off / rpiv-todo absent), in which
+   * case §4 falls back to "(no tasks or subagents this session)" when subagents
+   * are also empty.
+   */
+  taskTree: string;
 }
 
 export function checkpointWriterPrompt(a: WriterPromptArgs): string {
@@ -51,7 +59,7 @@ CHECKPOINT_PATH structure (11 sections, all required to exist; content may be "(
   ## §1 Active intent           - verbatim user request, block-quoted
   ## §2 Next concrete action    - concrete next step, with verbatim quote when possible
   ## §3 Directives (this session) - session-specific working style only
-  ## §4 Subagents               - subagent/actor activity, reconciled from the SUBAGENT PROGRESS block (see below). One line per actor: "- <id> · <type> · <status> — <one-line result>". Render "(no subagents this session)" when the block is empty. NEVER invent actor IDs or statuses.
+  ## §4 Task tree               - user task graph + subagents. Reconcile the TASK GRAPH block into one line per task: "- [<status>] #<id> <subject>". Then, under a "### Subagents" sub-header, reconcile the SUBAGENT PROGRESS block into one line per actor: "- <id> · <type> · <status> — <one-line result>". Use task IDs and actor IDs EXACTLY as given; NEVER invent or rename them. Render "(no tasks or subagents this session)" when both blocks are empty (omit the ### Subagents sub-header in that case).
   ## §5 Current work            - what was being done before checkpoint
   ## §6 Files and code sections - files actively read/edited with one-line purpose
   ## §7 Discovered knowledge (cross-task) - cross-task facts (candidates for MEMORY.md promotion)
@@ -70,7 +78,7 @@ PROCEDURE:
 
 Turn 1 - Gather all sources in parallel:
   The conversation delta is already inline at the end of this prompt — read it there directly (no tool call needed)
-  The SUBAGENT PROGRESS block (source for §4) is also inline at the end — read it there directly (no tool call needed)
+  The TASK GRAPH and SUBAGENT PROGRESS blocks (sources for §4) are also inline at the end — read them there directly (no tool call needed)
   Read CHECKPOINT_PATH
   Read MEMORY_PATH
   Read NOTES_PATH (file may not exist; treat as empty if so)
@@ -106,7 +114,7 @@ For §3 Directives in checkpoint.md, scan content:
     move that line's content into §5 Current work
   - Lines that are genuine session-only working preferences stay in §3
 
-For §4 Subagents: reconcile the SUBAGENT PROGRESS block (inlined at the end of this prompt) into one line per actor — "- <id> · <type> · <status> — <one-line result>". Use the actor IDs and statuses EXACTLY as given; never invent, rename, or infer them. If the block is empty or absent, render the body as "(no subagents this session)" and nothing else. Subagent results worth keeping cross-task also belong in §7 / §8 as usual.
+For §4 Task tree: reconcile BOTH inlined blocks (at the end of this prompt). First the TASK GRAPH block → one line per task "- [<status>] #<id> <subject>" (preserve any "⛓ #N" dependency markers and the ordering). Then, under a "### Subagents" sub-header, the SUBAGENT PROGRESS block → one line per actor "- <id> · <type> · <status> — <one-line result>". Use task IDs and actor IDs and statuses EXACTLY as given; never invent, rename, or infer them. If a block is empty, omit its part; if BOTH are empty, render the §4 body as "(no tasks or subagents this session)" and nothing else (no ### Subagents sub-header). Task or subagent results worth keeping cross-task also belong in §7 / §8 as usual.
 
 Turn 2 - Issue Edits in parallel (single message), then stop:
   For checkpoint.md:
@@ -174,6 +182,10 @@ EDGE CASES:
 ===== BEGIN CONVERSATION DELTA =====
 ${a.delta}
 ===== END CONVERSATION DELTA =====
+
+===== BEGIN TASK GRAPH =====
+${a.taskTree.trim() || "(no tasks this session)"}
+===== END TASK GRAPH =====
 
 ===== BEGIN SUBAGENT PROGRESS =====
 ${a.subagentProgress.trim() || "(no subagents this session)"}
