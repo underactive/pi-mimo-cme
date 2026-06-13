@@ -5,10 +5,11 @@ import * as path from "node:path";
 import { test } from "node:test";
 import {
   CheckpointManager,
-  DELTA_FILE_CAP,
+  DELTA_CAP,
   newlyCrossed,
   serializeDelta,
-  type ExecResultLike,
+  type WriterRequest,
+  type WriterResult,
 } from "../src/checkpoint.ts";
 import { openDb } from "../src/db.ts";
 
@@ -63,7 +64,7 @@ test("serializeDelta: whole file capped at ~100KB, head dropped, tail kept", () 
     content: `message number ${i} ` + "filler ".repeat(60),
   }));
   const out = serializeDelta(messages);
-  assert.ok(out.length <= DELTA_FILE_CAP + 200, `length was ${out.length}`);
+  assert.ok(out.length <= DELTA_CAP + 200, `length was ${out.length}`);
   assert.ok(out.startsWith("[delta truncated:"));
   assert.ok(out.includes("message number 599"), "tail must be kept");
   assert.ok(!out.includes("message number 0 "), "head must be dropped");
@@ -76,25 +77,24 @@ test("newlyCrossed returns ascending uncrossed thresholds", () => {
   assert.deepEqual(newlyCrossed(100, [80, 20], new Set()), [20, 80]);
 });
 
-test("CheckpointManager: fires once per threshold, writes delta, advances seq on success", async () => {
+test("CheckpointManager: fires once per threshold, inlines delta in prompt, advances seq on success", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cp-"));
   const root = path.join(agent, "pi-mimo-cme");
   const db = openDb(":memory:");
-  const execCalls: string[][] = [];
-  let execResolve: (() => void) | undefined;
+  const writerCalls: WriterRequest[] = [];
+  let releaseWriter: (() => void) | undefined;
   const manager = new CheckpointManager({
     db,
     root,
     thresholds: [20, 40],
     maxWriterFailures: 3,
-    piCommand: ["pi"],
     log: () => {},
-    exec: async (cmd, args) => {
-      execCalls.push([cmd, ...args]);
+    runWriter: async (req) => {
+      writerCalls.push(req);
       await new Promise<void>((resolve) => {
-        execResolve = resolve;
+        releaseWriter = resolve;
       });
-      return { stdout: "", stderr: "", code: 0, killed: false } satisfies ExecResultLike;
+      return { ok: true } satisfies WriterResult;
     },
   });
 
@@ -111,24 +111,21 @@ test("CheckpointManager: fires once per threshold, writes delta, advances seq on
     false,
   );
 
-  // Delta file + templates exist while the writer runs.
-  const deltaFile = path.join(root, "sessions", "s1", "delta-1.md");
-  assert.ok(fs.existsSync(deltaFile));
+  // Templates exist while the writer runs; the delta is inlined, NOT written to a file.
   assert.ok(fs.existsSync(path.join(root, "sessions", "s1", "checkpoint.md")));
   assert.ok(fs.existsSync(path.join(root, "sessions", "s1", "notes.md")));
   assert.ok(fs.existsSync(path.join(root, "projects", "p1", "MEMORY.md")));
-  assert.ok(fs.readFileSync(deltaFile, "utf8").includes("do the thing"));
+  assert.ok(!fs.existsSync(path.join(root, "sessions", "s1", "delta-1.md")), "no delta file written");
 
-  // The exec call is the env-wrapped pi invocation with the recursion guard.
-  assert.equal(execCalls.length, 1);
-  assert.equal(execCalls[0]![0], "/usr/bin/env");
-  assert.equal(execCalls[0]![1], "PI_MIMO_CME_CHILD=1");
-  assert.ok(execCalls[0]!.includes("--no-extensions"));
+  // The writer ran once, with the project cwd and the serialized delta inlined in the prompt.
+  assert.equal(writerCalls.length, 1);
+  assert.equal(writerCalls[0]!.cwd, "/w");
+  assert.ok(writerCalls[0]!.prompt.includes("BEGIN CONVERSATION DELTA"));
+  assert.ok(writerCalls[0]!.prompt.includes("do the thing"));
 
-  execResolve!();
+  releaseWriter!();
   await manager.waitForIdle(1000);
-  // Success: delta removed, last_checkpoint_seq advanced.
-  assert.ok(!fs.existsSync(deltaFile));
+  // Success: last_checkpoint_seq advanced to the branch message count.
   const seq = db.prepare("SELECT value FROM meta WHERE key = 'last_checkpoint_seq:s1'").get() as {
     value: string;
   };
@@ -137,7 +134,7 @@ test("CheckpointManager: fires once per threshold, writes delta, advances seq on
   fs.rmSync(agent, { recursive: true, force: true });
 });
 
-test("CheckpointManager: keeps delta and gives up after max consecutive failures", async () => {
+test("CheckpointManager: gives up after max consecutive writer failures", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpf-"));
   const root = path.join(agent, "pi-mimo-cme");
   const db = openDb(":memory:");
@@ -147,17 +144,16 @@ test("CheckpointManager: keeps delta and gives up after max consecutive failures
     root,
     thresholds: [20],
     maxWriterFailures: 2,
-    piCommand: ["pi"],
     log: () => {},
-    exec: async () => {
+    runWriter: async () => {
       calls += 1;
-      return { stdout: "", stderr: "boom", code: 1, killed: false };
+      return { ok: false, error: "boom" };
     },
   });
   const messages = [{ role: "user", content: "x" }];
   manager.fireCheckpoint({ sid: "s1", pid: "p1", cwd: "/w", messages });
   await manager.waitForIdle(1000);
-  assert.ok(fs.existsSync(path.join(root, "sessions", "s1", "delta-1.md")), "delta kept on failure");
+  assert.equal(calls, 1);
 
   manager.fireCheckpoint({ sid: "s1", pid: "p1", cwd: "/w", messages });
   await manager.waitForIdle(1000);
@@ -167,6 +163,10 @@ test("CheckpointManager: keeps delta and gives up after max consecutive failures
   const fired = manager.fireCheckpoint({ sid: "s1", pid: "p1", cwd: "/w", messages });
   assert.equal(fired, false);
   assert.equal(calls, 2);
+
+  // seq never advanced — no successful writer run.
+  const seq = db.prepare("SELECT value FROM meta WHERE key = 'last_checkpoint_seq:s1'").get();
+  assert.equal(seq, undefined);
   db.close();
   fs.rmSync(agent, { recursive: true, force: true });
 });
@@ -178,9 +178,8 @@ test("CheckpointManager: nudges fire once per level, 85% covers 70%", () => {
     root: "/unused",
     thresholds: [],
     maxWriterFailures: 3,
-    piCommand: ["pi"],
     log: () => {},
-    exec: async () => ({ stdout: "", stderr: "", code: 0, killed: false }),
+    runWriter: async () => ({ ok: true }),
   });
   assert.equal(manager.nudgeFor("s1", 50), undefined);
   const first = manager.nudgeFor("s1", 72);

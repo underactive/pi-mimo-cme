@@ -35,7 +35,7 @@ export function buildMemoryInstructions(ctx: InjectContext): string {
 You have a persistent file-based memory system. Four layers:
 
 - Project memory at \`${projectPath}\` — persistent across all sessions in this project. Contains: project context, rules, architecture decisions, durable cross-task knowledge.
-- Session checkpoint at \`${cpPath}\` — current session's structured state, written ONLY by the checkpoint-writer subprocess. 11 sections covering active intent, next action, directives, current work, files, learnings, errors, live resources, design decisions, and open notes.
+- Session checkpoint at \`${cpPath}\` — current session's structured state, written ONLY by the checkpoint writer. 11 sections covering active intent, next action, directives, current work, files, learnings, errors, live resources, design decisions, and open notes.
 - Global memory at \`${globalPath}\` — user-level preferences and cross-project feedback that persist across all projects. Read-only from the agent side; the dream pass promotes entries there.
 - Raw history — every past session's conversation, indexed machine-wide. Search it with the \`history\` tool when curated memory has no answer.
 

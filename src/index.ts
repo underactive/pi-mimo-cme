@@ -8,11 +8,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+  createAgentSession,
+  DefaultResourceLoader,
   isToolCallEventType,
+  SessionManager,
+  type AgentSession,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { CheckpointManager } from "./checkpoint.ts";
+import { CheckpointManager, type WriterFn } from "./checkpoint.ts";
 import {
   buildDistillPrompt,
   buildDreamPrompt,
@@ -29,7 +33,7 @@ import { agentDir, dbPath, logsDir, memoryRoot, projectId, sessionsJsonlDir } fr
 import { reconcile } from "./reconcile.ts";
 import { registerHistoryTool, registerMemoryTool } from "./tools.ts";
 
-/** argv prefix to re-invoke pi for writer/dream/distill subprocesses. */
+/** argv prefix to re-invoke pi for the dream/distill subprocesses. */
 function resolvePiCommand(): string[] {
   const entry = process.argv[1];
   if (entry && /[\\/]cli\.js$/.test(entry)) return [process.execPath, entry];
@@ -37,8 +41,10 @@ function resolvePiCommand(): string[] {
 }
 
 export default function piMimoCme(pi: ExtensionAPI) {
-  // Recursion guard: writer/dream/distill children must not re-run the
-  // extension (they are spawned with --no-extensions AND this env belt).
+  // Recursion guard for the dream/distill subprocesses: they re-invoke pi and
+  // must not re-run the extension (spawned with --no-extensions AND this env
+  // belt). The in-process checkpoint writer needs no env guard — its
+  // noExtensions resource loader is what keeps pi-mimo-cme from binding to it.
   if (process.env["PI_MIMO_CME_CHILD"] === "1") return;
 
   const root = memoryRoot();
@@ -55,12 +61,13 @@ export default function piMimoCme(pi: ExtensionAPI) {
   };
 
   // The latest ctx seen by any event handler. Memory's "transformation
-  // moments" (checkpoint writer, dream/distill subprocesses) resolve
-  // asynchronously, OUTSIDE any handler's scope, and the headless children
-  // doing the work have no UI of their own — so they reach whatever UI is
-  // currently live through this shim rather than a captured-at-spawn ctx.
-  // Updated in safe() on every handler invocation; a fresh per-event ctx is
-  // fine since they all front the same live session/UI.
+  // moments" (the in-process checkpoint writer, the dream/distill subprocesses)
+  // resolve asynchronously, OUTSIDE any handler's scope, and none of them has a
+  // UI of its own — so they reach whatever UI is currently live through this
+  // shim rather than a captured-at-spawn ctx. The writer also reads its model /
+  // modelRegistry off this shim for the same reason. Updated in safe() on every
+  // handler invocation; a fresh per-event ctx is fine since they all front the
+  // same live session/UI.
   let latestCtx: ExtensionContext | undefined;
   const notify = (message: string, level: "info" | "warning" | "error" = "info"): void => {
     if (latestCtx?.hasUI) latestCtx.ui.notify(message, level);
@@ -104,13 +111,87 @@ export default function piMimoCme(pi: ExtensionAPI) {
   // across the factory's reconcile call sites (here + reconcileAndNotify) so the
   // footer stays exact however memory_fts changed mid-turn. See footer-counts.ts.
   const counts = new FooterCounts();
+  /**
+   * In-process checkpoint writer (Phase 1) — replaces the headless
+   * `pi --no-extensions --no-session -p` subprocess. Builds a throwaway pi SDK
+   * session and hands it the writer prompt with the conversation delta inlined.
+   *
+   * Why it's safe to run in our own process:
+   * - `DefaultResourceLoader({ noExtensions: true, ... })` loads ZERO extensions
+   *   for this session, so pi-mimo-cme never binds to it. That IS the in-process
+   *   recursion guard — the `PI_MIMO_CME_CHILD` env belt only stops subprocesses,
+   *   and in-process that var is unset. noExtensions also keeps our path guard,
+   *   history indexer, and turn_end threshold from firing on the writer's work.
+   * - `SessionManager.inMemory()` never persists a session JSONL, so the layer-4
+   *   backfill can't index the writer's own transcript (replaces `--no-session`).
+   * - model + modelRegistry come from the LIVE ctx via the `latestCtx` shim: this
+   *   runs async, after the handler returned, so a captured ctx may be stale
+   *   (AGENTS.md "async UI after await" rule). The registry carries auth, so the
+   *   writer authenticates exactly as the live session does.
+   * - tools are read/write/edit only (least privilege for a memory daemon).
+   *
+   * Success/failure mirrors pi's own print mode (modes/print-mode.js): a thrown
+   * error, or a final assistant message with stopReason error/aborted, is a
+   * failure. We do NOT require non-empty final text — the writer is instructed to
+   * stay silent after its Edits, so empty output is the success case.
+   */
+  const runWriter: WriterFn = async ({ prompt, cwd }) => {
+    const ctx = latestCtx;
+    if (!ctx?.model || !ctx.modelRegistry) {
+      return { ok: false, error: "in-process writer: no live model/registry available" };
+    }
+    const dir = agentDir();
+    let session: AgentSession | undefined;
+    try {
+      const loader = new DefaultResourceLoader({
+        cwd,
+        agentDir: dir,
+        noExtensions: true, // critical: no pi-mimo-cme in the writer session (recursion/binding guard)
+        noSkills: true,
+        noContextFiles: true,
+        noPromptTemplates: true,
+        noThemes: true,
+      });
+      await loader.reload();
+      const created = await createAgentSession({
+        cwd,
+        agentDir: dir,
+        model: ctx.model,
+        modelRegistry: ctx.modelRegistry,
+        tools: ["read", "write", "edit"],
+        resourceLoader: loader,
+        sessionManager: SessionManager.inMemory(cwd), // ephemeral: no JSONL → never backfilled
+      });
+      session = created.session;
+      await session.prompt(prompt);
+      // Mirror print-mode's success check: inspect the final assistant message.
+      const messages = session.state.messages as ReadonlyArray<{
+        role?: string;
+        stopReason?: string;
+        errorMessage?: string;
+      }>;
+      const last = messages[messages.length - 1];
+      if (last?.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted")) {
+        return { ok: false, error: last.errorMessage ?? `writer stopped: ${last.stopReason}` };
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? (err.stack ?? err.message) : String(err) };
+    } finally {
+      try {
+        session?.dispose();
+      } catch {
+        /* dispose is best-effort */
+      }
+    }
+  };
+
   const checkpoints = new CheckpointManager({
     db,
     root,
     thresholds: config.checkpoint.thresholds,
     maxWriterFailures: config.checkpoint.maxWriterFailures,
-    exec: (command, args, options) => pi.exec(command, args, options),
-    piCommand: resolvePiCommand(),
+    runWriter,
     log,
     notify,
   });

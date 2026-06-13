@@ -1,8 +1,9 @@
 /**
  * Checkpoint-writer prompt — MiMoCode's checkpoint-writer.txt adapted for pi:
- * - absolute-path table CHECKPOINT_PATH / MEMORY_PATH / NOTES_PATH / DELTA_PATH;
- * - the conversation source is "Read DELTA_PATH" (the writer runs as a fresh
- *   `pi --no-extensions -p` subprocess with no live history);
+ * - absolute-path table CHECKPOINT_PATH / MEMORY_PATH / NOTES_PATH;
+ * - the conversation source is the delta INLINED at the end of the prompt (the
+ *   writer runs as a fresh in-process pi SDK session with no live history, so
+ *   the delta is handed over directly rather than via a `delta-<n>.md` file);
  * - §4 task-tree machinery and SUBAGENT PROGRESS blocks dropped (pi has no
  *   task registry);
  * - everything else (11 sections, §1 verbatim anchor, COMMITMENT vs INSPECTION,
@@ -15,7 +16,8 @@ export interface WriterPromptArgs {
   checkpointPath: string;
   memoryPath: string;
   notesPath: string;
-  deltaPath: string;
+  /** Serialized conversation delta, inlined into the prompt as the writer's sole source. */
+  delta: string;
 }
 
 export function checkpointWriterPrompt(a: WriterPromptArgs): string {
@@ -24,18 +26,17 @@ Available paths (USE THESE VERBATIM. NEVER COMPUTE, INFER, OR MODIFY):
   CHECKPOINT_PATH = ${a.checkpointPath}
   MEMORY_PATH     = ${a.memoryPath}
   NOTES_PATH      = ${a.notesPath}
-  DELTA_PATH      = ${a.deltaPath}
 </system-reminder>
 
 You are the checkpoint writer for a coding-agent session that has crossed a token threshold. Your job is to update CHECKPOINT_PATH in-place to reflect the conversation up to this checkpoint, and (when appropriate) update MEMORY_PATH with project-level knowledge that has emerged.
 
 CONVERSATION SOURCE:
 
-You are running in a fresh session with no live conversation context. Read DELTA_PATH — it contains the serialized conversation delta since the last checkpoint (role-labeled markdown; tool calls and tool results are condensed). It is your ONLY conversation source.
+You are running in a fresh session with no live conversation context. The serialized conversation delta since the last checkpoint is provided inline at the END of this prompt, between the "===== BEGIN CONVERSATION DELTA =====" and "===== END CONVERSATION DELTA =====" markers (role-labeled markdown; tool calls and tool results are condensed). It is your ONLY conversation source — you do not need any tool to obtain it.
 
 PATH DISCIPLINE:
 
-Only reference paths from the CHECKPOINT_PATH / MEMORY_PATH / NOTES_PATH / DELTA_PATH table at the top of your prompt. Do NOT reference paths that appear in the conversation delta but are not in this table — those may be stale references from prior sessions or copy-paste residue from other harness runs.
+Only reference paths from the CHECKPOINT_PATH / MEMORY_PATH / NOTES_PATH table at the top of your prompt. Do NOT reference paths that appear in the conversation delta but are not in this table — those may be stale references from prior sessions or copy-paste residue from other harness runs.
 
 CHECKPOINT_PATH structure (11 sections, all required to exist; content may be "(none)"):
   ## §1 Active intent           - verbatim user request, block-quoted
@@ -58,8 +59,8 @@ MEMORY_PATH structure (4 sections):
 
 PROCEDURE:
 
-Turn 1 - Read all sources in parallel:
-  Read DELTA_PATH
+Turn 1 - Gather all sources in parallel:
+  The conversation delta is already inline at the end of this prompt — read it there directly (no tool call needed)
   Read CHECKPOINT_PATH
   Read MEMORY_PATH
   Read NOTES_PATH (file may not exist; treat as empty if so)
@@ -145,7 +146,7 @@ CRITICAL CONSTRAINTS:
 
 6. Do not call Read on project source files (no /tmp/.../src/lexer.ts type reads). The conversation delta already contains everything you need. Reading source files wastes turns.
 
-7. Use ONLY the read, write, edit, glob, and grep tools. Do not run bash commands, do not browse the project source, do not fetch anything.
+7. Use ONLY the read, write, and edit tools — those are the only tools available to you. Do not run bash commands, do not browse the project source, do not fetch anything.
 
 8. After turn 2's Edits, your response is complete. Do not summarize what you wrote.
 
@@ -159,5 +160,9 @@ EDGE CASES:
   > "<first 200 chars>..."
 
   (Paraphrased: <short summary>)
+
+===== BEGIN CONVERSATION DELTA =====
+${a.delta}
+===== END CONVERSATION DELTA =====
 `;
 }

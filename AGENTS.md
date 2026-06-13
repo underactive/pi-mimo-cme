@@ -49,10 +49,16 @@ There is **no build, lint, or bundle step.** Tests cover the pure / pure-ish mod
 - **`safe(name, fn)` wraps every handler** (SPEC §9.5): a memory failure must never break the host session. It logs to
   `pi-mimo-cme/logs/extension.log`, shows at most one throttled toast (60s window), and swallows the error. Keep new
   handlers inside this wrapper.
-- **Recursion guard:** the writer/dream/distill children are spawned as `pi --no-extensions --no-session -p` with
-  `PI_MIMO_CME_CHILD=1` (set via `/usr/bin/env` because pi's `ExecOptions` has no `env` field). The factory returns
-  immediately when it sees that env var. `--no-session` is mandatory — else the child's JSONL gets backfilled as
-  layer-4 history (the memory system indexing its own transcripts).
+- **Recursion guards differ by worker.** The checkpoint **writer** runs in-process (`runWriter` in `index.ts`): its
+  session is built with `DefaultResourceLoader({ noExtensions: true })`, so pi-mimo-cme never binds to it — that is
+  what stops it recursing or tripping our own path guard / history indexer / `turn_end` thresholds (the
+  `PI_MIMO_CME_CHILD` env belt only stops *subprocesses*, and in-process that var is unset). It uses
+  `SessionManager.inMemory()`, so no session JSONL is persisted (nothing for the layer-4 backfill to re-index). Model
+  + auth come from the live `ctx` via the `latestCtx` shim, never a captured ctx. **Dream/distill** still run as
+  subprocesses (`pi --no-extensions --no-session -p` with `PI_MIMO_CME_CHILD=1`, set via `/usr/bin/env` because pi's
+  `ExecOptions` has no `env` field); the factory returns immediately when it sees that env var, and `--no-session` is
+  mandatory there — else the child's JSONL gets backfilled as layer-4 history (the memory system indexing its own
+  transcripts).
 - **FTS5 external-content deletes use the magic command:** `INSERT INTO ..._idx(..._idx, rowid, body) VALUES('delete',
   OLD.id, OLD.body)`, **never a plain `DELETE FROM` the vtab** (that's contentless-mode syntax; misapplied here it
   leaks tokens until the vtab corrupts). See the preserved war-story comment in `db.ts`. The `_ai`/`_ad`/`_au` triggers

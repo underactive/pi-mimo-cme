@@ -76,10 +76,6 @@ export function notesPath(sid: string, root: string = memoryRoot()): string {
   return path.join(sessionDir(sid, root), "notes.md");
 }
 
-export function deltaPath(sid: string, n: number, root: string = memoryRoot()): string {
-  return path.join(sessionDir(sid, root), `delta-${n}.md`);
-}
-
 export type MemoryType = "memory" | "checkpoint" | "notes" | "free";
 
 /** Type detection from the file key, like MiMoCode's paths.ts regexes. */

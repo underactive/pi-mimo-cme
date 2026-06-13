@@ -34,9 +34,8 @@ Root: `path.join(getAgentDir(), "memory")` → `~/.pi/agent/pi-mimo-cme/` (respe
 ├── global/MEMORY.md               # layer 3
 ├── projects/<pid>/MEMORY.md       # layer 2; pid = sha256(absolute cwd hex)[:12]
 └── sessions/<sid>/                # layer 1; sid = ctx.sessionManager.getSessionId()
-    ├── checkpoint.md              # 11 sections — written ONLY by writer subprocess
-    ├── notes.md                   # main agent's only legal scratchpad, append-only
-    └── delta-<n>.md               # serialized conversation delta handed to the writer
+    ├── checkpoint.md              # 11 sections — written ONLY by the in-process writer session
+    └── notes.md                   # main agent's only legal scratchpad, append-only
 ```
 
 Layers 1–3 are markdown files = source of truth. The DB is a derived index plus the
@@ -156,38 +155,51 @@ Per research §5.4: `operation` (search|around), `query?`, `scope?` (project|glo
 Created from MiMoCode's template verbatim (research §6) on session first-write. The
 system prompt teaches the append contract. Guard (§4.4) allows it.
 
-### 4.3 Checkpoint writer (threshold-driven subprocess)
+### 4.3 Checkpoint writer (threshold-driven, in-process)
 
 - On `turn_end`: read `ctx.getContextUsage()` (inspect the real `ContextUsage` type in
   `<pkg>/dist/core/extensions/types.d.ts`). Thresholds default `[20,40,60,80]` percent
   (window-size-dependent tiers like MiMo are overkill here; keep flat default,
   configurable). Track crossed set per session in memory + meta. On first crossing:
   1. Serialize the conversation **delta** (entries after `last_checkpoint_seq`) from
-     `ctx.sessionManager.getBranch()` to `sessions/<sid>/delta-<n>.md` — role-labeled
-     markdown; tool calls condensed to `tool(name): <input ≤500 chars>`; tool results
-     ≤500 chars; cap whole file ~100KB (truncate head, keep tail).
+     `ctx.sessionManager.getBranch()` — role-labeled markdown; tool calls condensed to
+     `tool(name): <input ≤500 chars>`; tool results ≤500 chars; cap the inlined delta
+     text ~100KB (`DELTA_CAP`, truncate head, keep tail). The delta is carried **inline**
+     in the writer prompt, not written to disk.
   2. Ensure checkpoint.md / MEMORY.md / notes.md exist from templates (research §6
      verbatim: 11 sections with italic instruction lines, 4-section MEMORY.md, notes
      template).
-  3. Spawn **one at a time** (queue depth 1, newest wins):
-     `pi --no-extensions -p "<writer prompt>"` via `pi.exec()`, cwd = project, env
-     `PI_MIMO_CME_CHILD=1`. Writer prompt = MiMoCode's checkpoint-writer prompt
+  3. Run **one at a time** (queue depth 1, newest wins) via the injected `runWriter`
+     dependency: an **in-process pi SDK session** (`createAgentSession` with
+     `model`/`modelRegistry` from the live ctx, `tools: ["read","write","edit"]`, a
+     `DefaultResourceLoader({ noExtensions: true, ... })`, and
+     `SessionManager.inMemory(cwd)`), then `await session.prompt(prompt)` and
+     `session.dispose()`. Writer prompt = MiMoCode's checkpoint-writer prompt
      (research §8.1) adapted: absolute-path table (CHECKPOINT_PATH / MEMORY_PATH /
-     NOTES_PATH / DELTA_PATH "USE THESE VERBATIM"); the conversation source is "Read
-     DELTA_PATH" instead of live history; drop §4 task-tree machinery and SUBAGENT
-     PROGRESS blocks (render §4 as "(no task registry)"); keep all 11 sections, the
-     §1 verbatim-quote anchor, COMMITMENT vs INSPECTION rule, EXACT-FORM CONSTRAINT
-     LITERAL rule, section budgets `{{SECTION_BUDGETS}}` substituted (research §6
-     budgets), spillover-extraction rule, notes.md wipe-to-template rule.
-  4. On exit 0: advance `last_checkpoint_seq`, delete the delta file, log to `logs/`.
-     On failure: keep delta, log, give up after 3 consecutive failures (like MiMo).
+     NOTES_PATH "USE THESE VERBATIM"); the conversation source is the delta inlined
+     between `===== BEGIN CONVERSATION DELTA =====` / `===== END CONVERSATION DELTA =====`
+     markers at the end of the prompt instead of live history (no tool needed to obtain
+     it); drop §4 task-tree machinery and SUBAGENT PROGRESS blocks (render §4 as
+     "(no task registry)"); keep all 11 sections, the §1 verbatim-quote anchor,
+     COMMITMENT vs INSPECTION rule, EXACT-FORM CONSTRAINT LITERAL rule, section budgets
+     `{{SECTION_BUDGETS}}` substituted (research §6 budgets), spillover-extraction rule,
+     notes.md wipe-to-template rule.
+  4. On success (writer mirrors pi's print mode: no thrown error and a final assistant
+     message whose `stopReason` is not `error`/`aborted` — the writer is told to stay
+     silent after its Edits, so non-empty final text is NOT required): advance
+     `last_checkpoint_seq`, log to `logs/`. On failure: log, give up after 3 consecutive
+     failures (like MiMo).
 - Also fire (best-effort, fire-and-forget) in `session_before_compact` so state is
   captured before pi compacts — inspect that event's type first; if it can be awaited,
   await with a hard timeout (~60s like MiMo's rebuild wait).
 - **Memory-flush nudge**: when usage ≥70% and ≥85%, inject once per level via
   `before_agent_start` message: MiMoCode's "Context is filling up..." reminder text.
-- Recursion guard: factory returns immediately (registers nothing) when
-  `process.env.PI_MIMO_CME_CHILD === "1"`.
+- Recursion guard: the in-process writer session never binds pi-mimo-cme because its
+  `DefaultResourceLoader({ noExtensions: true })` loads zero extensions, and
+  `SessionManager.inMemory()` writes no JSONL (so the layer-4 backfill can't index a
+  writer transcript — this replaces the writer's old `--no-session` flag). The factory's
+  `process.env.PI_MIMO_CME_CHILD === "1"` early-return guard now applies ONLY to the
+  dream/distill subprocesses (§5).
 
 ### 4.4 Path guard (`tool_call` event)
 
@@ -196,8 +208,9 @@ path is under the memory root; allow ONLY (a) `sessions/<current sid>/notes.md`,
 (b) `projects/<current pid>/MEMORY.md`; block everything else (checkpoint.md, global
 MEMORY.md, other sessions/projects) with `{ block: true, reason }` quoting MiMoCode's
 rules ("checkpoint.md is the writer's domain", "no learning.md, no scratch.md — use
-notes.md"). Use `isToolCallEventType` guards. Writer/dream subprocesses run without the
-extension, so they are unaffected.
+notes.md"). Use `isToolCallEventType` guards. The in-process writer session (no
+extensions loaded) and the dream/distill subprocesses run without the extension, so they
+are unaffected.
 
 ## 5. Evolution
 
@@ -260,7 +273,7 @@ src/budget.ts       # token estimate, budgetedRead with truncation marker
 src/templates.ts    # checkpoint/MEMORY/notes templates + section budgets (verbatim from research §6)
 src/inject.ts       # system-prompt assembly + rebuild dump assembly
 src/history.ts      # message_end indexing, seq counters, JSONL backfill
-src/checkpoint.ts   # usage thresholds, delta serialization, writer subprocess, nudges
+src/checkpoint.ts   # usage thresholds, delta serialization, in-process writer (runWriter dep), nudges
 src/guard.ts        # tool_call path guard
 src/tools.ts        # memory + history tool definitions
 src/commands.ts     # /memory /dream /distill
@@ -297,7 +310,7 @@ README.md           # what/why, CME mapping, four layers, install, config, diver
    output, throw-to-fail, ExperimentalWarning is cosmetic, StringEnum for enums.
 3. All DB writes in transactions where multi-statement.
 4. Never delete user markdown except notes.md wipe-by-writer (which is prompt-driven,
-   in the subprocess, not our code).
+   performed by the in-process writer session, not our code).
 5. Failure posture: memory failures must never break the session — wrap event handlers
    in try/catch, log to `logs/extension.log`, `ctx.ui.notify` on first error only.
 

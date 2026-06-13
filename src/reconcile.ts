@@ -88,8 +88,10 @@ function walkMemoryTree(opts: ReconcileOptions): WalkedFile[] {
     for (const entry of ids) {
       if (!entry.isDirectory()) continue;
       for (const file of listMarkdownFiles(path.join(scopeDir, entry.name))) {
-        // delta-<n>.md is a transient writer handoff (raw conversation, layer-4
-        // territory) — never index it as curated memory.
+        // delta-<n>.md was a transient writer handoff (raw conversation, layer-4
+        // territory). The in-process writer no longer produces these, but older
+        // installs may have left stale ones behind — keep skipping them so a
+        // leftover delta is never indexed as curated memory.
         if (scope === "sessions" && /^delta-\d+\.md$/.test(path.basename(file))) continue;
         files.push({ path: file, scope, scopeId: entry.name, type: typeFromKey(file) });
       }

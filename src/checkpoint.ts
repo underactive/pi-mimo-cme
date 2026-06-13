@@ -1,18 +1,25 @@
 /**
  * Memory write path: context-usage thresholds, conversation-delta
- * serialization, the checkpoint-writer subprocess (queue depth 1, newest
- * wins), and memory-flush nudges.
+ * serialization, the in-process checkpoint-writer session (queue depth 1,
+ * newest wins), and memory-flush nudges.
  */
 import * as fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { metaGet, metaSet } from "./db.ts";
-import { checkpointPath, deltaPath, notesPath, projectMemoryPath, sessionDir } from "./paths.ts";
+import { checkpointPath, notesPath, projectMemoryPath, sessionDir } from "./paths.ts";
 import { checkpointWriterPrompt } from "./prompts/checkpoint-writer.ts";
 import { CHECKPOINT_TEMPLATE, MEMORY_TEMPLATE, NOTES_TEMPLATE, ensureFile } from "./templates.ts";
 
 const TOOL_INPUT_CAP = 500;
 const TOOL_RESULT_CAP = 500;
-export const DELTA_FILE_CAP = 100_000;
+/**
+ * Upper bound on the conversation delta handed to the writer. Formerly a
+ * filesystem cap on `delta-<n>.md`; now the writer runs in-process and the
+ * delta is inlined into its prompt, so this is a token-budget guard on that
+ * string — we choose the budget. The head is dropped; the newest content is
+ * what the writer needs most.
+ */
+export const DELTA_CAP = 100_000;
 
 interface ContentPart {
   type?: string;
@@ -76,8 +83,8 @@ export function serializeDelta(messages: unknown[]): string {
     }
   }
   let out = blocks.join("\n\n") + "\n";
-  if (out.length > DELTA_FILE_CAP) {
-    const dropped = out.length - DELTA_FILE_CAP;
+  if (out.length > DELTA_CAP) {
+    const dropped = out.length - DELTA_CAP;
     out = `[delta truncated: first ${dropped} bytes dropped — newest content kept]\n\n` + out.slice(dropped);
   }
   return out;
@@ -92,32 +99,41 @@ export function newlyCrossed(
   return [...thresholds].sort((a, b) => a - b).filter((t) => percent >= t && !alreadyCrossed.has(t));
 }
 
-export interface ExecResultLike {
-  stdout: string;
-  stderr: string;
-  code: number;
-  killed: boolean;
+/** Outcome of one writer run, as reported by the injected runner. */
+export interface WriterResult {
+  ok: boolean;
+  /** Short diagnostic, logged on failure. */
+  error?: string;
 }
 
-export type ExecFn = (
-  command: string,
-  args: string[],
-  options?: { cwd?: string; timeout?: number },
-) => Promise<ExecResultLike>;
+export interface WriterRequest {
+  /** The full checkpoint-writer prompt, conversation delta already inlined. */
+  prompt: string;
+  /** Project cwd the writer's file tools resolve relative paths against. */
+  cwd: string;
+}
+
+/**
+ * Runs one checkpoint-writer pass and resolves to its outcome. The
+ * implementation (an in-process pi SDK session) lives in index.ts so this
+ * module stays pure and testable; a mock runner drives the unit tests. An
+ * ordinary writer failure resolves to `{ok:false}` rather than throwing — a
+ * thrown error is treated as a failure too, but the runner owns the
+ * distinction.
+ */
+export type WriterFn = (req: WriterRequest) => Promise<WriterResult>;
 
 export interface CheckpointDeps {
   db: DatabaseSync;
   root: string;
   thresholds: readonly number[];
   maxWriterFailures: number;
-  exec: ExecFn;
-  /** argv prefix to invoke pi (e.g. [node, cli.js] or ["pi"]). */
-  piCommand: string[];
+  runWriter: WriterFn;
   log: (message: string) => void;
   /**
-   * Optional UI toast. The writer runs in a headless subprocess that has no
-   * UI of its own, so the "checkpoint saved" moment can only surface here, in
-   * the parent, when run() observes the child's exit code. No-op without a UI.
+   * Optional UI toast. The writer runs in a headless in-process session with
+   * no UI of its own, so the "checkpoint saved" moment can only surface here,
+   * in the parent, when run() observes the writer's outcome. No-op without a UI.
    */
   notify?: (message: string, level?: "info" | "warning" | "error") => void;
 }
@@ -126,7 +142,8 @@ interface WriterJob {
   sid: string;
   pid: string;
   cwd: string;
-  deltaFile: string;
+  /** Serialized conversation delta, inlined into the writer prompt. */
+  delta: string;
   /** Branch message count at serialization time — becomes last_checkpoint_seq. */
   messageCount: number;
 }
@@ -190,11 +207,10 @@ export class CheckpointManager {
     const lastSeq = Number(metaGet(db, `last_checkpoint_seq:${args.sid}`) ?? "0");
     const delta = args.messages.slice(lastSeq);
     if (delta.length === 0) return false;
-    const n = Number(metaGet(db, `delta_n:${args.sid}`) ?? "0") + 1;
-    metaSet(db, `delta_n:${args.sid}`, String(n));
-    const deltaFile = deltaPath(args.sid, n, root);
+    // The writer runs in-process and reads/edits these in place, so they must
+    // exist before it starts; the delta itself is inlined into the prompt (no
+    // temp file) — see WriterJob.delta.
     fs.mkdirSync(sessionDir(args.sid, root), { recursive: true });
-    fs.writeFileSync(deltaFile, serializeDelta(delta), "utf8");
     ensureFile(checkpointPath(args.sid, root), CHECKPOINT_TEMPLATE);
     ensureFile(notesPath(args.sid, root), NOTES_TEMPLATE);
     ensureFile(projectMemoryPath(args.pid, root), MEMORY_TEMPLATE);
@@ -202,18 +218,13 @@ export class CheckpointManager {
       sid: args.sid,
       pid: args.pid,
       cwd: args.cwd,
-      deltaFile,
+      delta: serializeDelta(delta),
       messageCount: args.messages.length,
     };
     if (this.running) {
       // Newest wins: its delta range is a strict superset of the evicted one's.
-      if (this.pending) {
-        try {
-          fs.rmSync(this.pending.deltaFile, { force: true });
-        } catch {
-          /* best effort */
-        }
-      }
+      // The evicted job held only an in-memory string, so dropping it needs no
+      // cleanup (the old delta-<n>.md eviction is gone).
       this.pending = job;
     } else {
       void this.run(job);
@@ -241,38 +252,24 @@ export class CheckpointManager {
         checkpointPath: checkpointPath(job.sid, root),
         memoryPath: projectMemoryPath(job.pid, root),
         notesPath: notesPath(job.sid, root),
-        deltaPath: job.deltaFile,
+        delta: job.delta,
       });
-      // /usr/bin/env wrapper sets the recursion guard; ExecOptions has no env field.
-      // --no-session: this ephemeral child only reads delta/memory files and writes
-      // markdown; without it, print mode (-p) persists a session JSONL into the same
-      // dir the layer-4 backfill scans, so the memory system would index its own
-      // checkpoint-writer transcripts as user conversation. (subagent example does the same.)
-      const result = await this.deps.exec(
-        "/usr/bin/env",
-        ["PI_MIMO_CME_CHILD=1", ...this.deps.piCommand, "--no-extensions", "--no-session", "-p", prompt],
-        { cwd: job.cwd },
-      );
-      if (result.code === 0) {
+      const result = await this.deps.runWriter({ prompt, cwd: job.cwd });
+      if (result.ok) {
         metaSet(db, `last_checkpoint_seq:${job.sid}`, String(job.messageCount));
-        try {
-          fs.rmSync(job.deltaFile, { force: true });
-        } catch {
-          /* best effort */
-        }
         this.consecutiveFailures = 0;
         this.deps.log(`checkpoint: writer ok (sid=${job.sid}, messages=${job.messageCount})`);
         this.deps.notify?.("💾 mimo-cme: checkpoint saved — session memory written");
       } else {
         this.consecutiveFailures += 1;
         this.deps.log(
-          `checkpoint: writer failed code=${result.code} (failure ${this.consecutiveFailures}/${this.deps.maxWriterFailures})\n` +
-            `stderr: ${result.stderr.slice(0, 2000)}`,
+          `checkpoint: writer failed (failure ${this.consecutiveFailures}/${this.deps.maxWriterFailures})` +
+            (result.error ? `\n${result.error.slice(0, 2000)}` : ""),
         );
       }
     } catch (err) {
       this.consecutiveFailures += 1;
-      this.deps.log(`checkpoint: writer exec error: ${String(err)}`);
+      this.deps.log(`checkpoint: writer error: ${String(err)}`);
     } finally {
       const next = this.pending;
       this.pending = null;

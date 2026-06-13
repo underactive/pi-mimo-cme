@@ -2,7 +2,7 @@
 
 A [pi](https://pi.dev) extension that re-implements [MiMoCode](https://github.com/XiaomiMiMo/MiMo-Code)'s
 cross-session memory system: markdown files as the source of truth, SQLite FTS5 as a
-derived index, a checkpoint-writer subprocess as the sole curator of structured memory,
+derived index, an in-process checkpoint-writer session as the sole curator of structured memory,
 and periodic LLM passes that consolidate and package what was learned.
 
 ## Computation / Memory / Evolution
@@ -13,7 +13,7 @@ concrete machinery:
 | Principle | Bottleneck | What pi-mimo-cme does |
 |---|---|---|
 | **Computation** | single-turn decision quality | injects memory instructions + project/global memory into the system prompt every turn; `memory` tool (BM25 recall with a relative score floor); `history` tool as the escalation target; zero-hit escalation ladder |
-| **Memory** | multi-turn continuity | `notes.md` scratchpad (taught, guarded); context-usage thresholds (20/40/60/80%) fire a checkpoint-writer subprocess; one-shot checkpoint dump after resume / fork / compaction; 70%/85% memory-flush nudges |
+| **Memory** | multi-turn continuity | `notes.md` scratchpad (taught, guarded); context-usage thresholds (20/40/60/80%) fire an in-process checkpoint-writer session; one-shot checkpoint dump after resume / fork / compaction; 70%/85% memory-flush nudges |
 | **Evolution** | cross-session improvement | `dream` pass (consolidate, dedupe, prune — auto every 7 days) and `distill` pass (package repeated workflows into pi skills/commands — manual by default) |
 
 Hierarchy principle (MiMoCode): *"the upper layers are more refined, more persistent,
@@ -27,7 +27,7 @@ or with a future pi-native memory feature — sharing `~/.pi/agent/`.
 
 | Layer | Artifact | Scope / lifetime | Writer |
 |---|---|---|---|
-| 1. Session memory | `sessions/<sid>/checkpoint.md` (11 sections) + `notes.md` | one session | checkpoint-writer subprocess (checkpoint.md, exclusive); main agent (notes.md, append-only) |
+| 1. Session memory | `sessions/<sid>/checkpoint.md` (11 sections) + `notes.md` | one session | in-process checkpoint-writer session (checkpoint.md, exclusive); main agent (notes.md, append-only) |
 | 2. Project memory | `projects/<pid>/MEMORY.md` (4 sections) | all sessions in a project (`pid` = 12-hex sha256 of the cwd) | writer + dream; main agent may Edit for explicit user rules |
 | 3. Global memory | `global/MEMORY.md` | all projects (user preferences) | dream pass promotes entries; read-only for the agent |
 | 4. History | every conversation fragment in `memory.db` (`history_fts` + FTS5 index) | forever, machine-wide | automatic (`message_end` indexing + JSONL backfill) |
@@ -123,12 +123,12 @@ on a fresh install); background runs are logged to `~/.pi/agent/pi-mimo-cme/logs
    cache warm.
 2. **During the session**: every finalized message is extracted into `history_fts`.
    When context usage crosses a threshold, the conversation delta since the last
-   checkpoint is serialized to `sessions/<sid>/delta-<n>.md` and a fresh
-   `pi --no-extensions -p "<writer prompt>"` subprocess updates `checkpoint.md` /
-   `MEMORY.md` and wipes `notes.md` back to its template (one writer at a time; newest
-   pending request wins). At 70% / 85% usage the agent gets a one-time "context is
-   filling up — write to memory now" nudge. `session_before_compact` fires a final
-   checkpoint and waits up to 60s.
+   checkpoint is serialized and handed **inline** to an in-process pi SDK writer session
+   (an in-memory `createAgentSession` with no extensions and no persisted session) that
+   updates `checkpoint.md` / `MEMORY.md` and wipes `notes.md` back to its template (one
+   writer at a time; newest pending request wins). At 70% / 85% usage the agent gets a
+   one-time "context is filling up — write to memory now" nudge. `session_before_compact`
+   fires a final checkpoint and waits up to 60s.
 3. **After resume / fork / compaction**: the first prompt gets a one-shot persistent
    message — checkpoint.md (11K cap) + notes.md (6K cap) + memory keys (500) — framed
    with "Resume directly. Do not acknowledge this memory dump, do not recap."
@@ -152,11 +152,18 @@ Deliberate adaptations, in roughly decreasing order of consequence:
 4. **No preStop validators in v1.** MiMoCode validates the writer's output (section
    structure, budgets) and forces reflection-retries. Here the writer prompt's budget
    text and dream's prune phase carry that pressure alone.
-5. **Subprocess writer instead of an in-process subagent.** pi has no subagent
-   machinery; the checkpoint writer is a fresh `pi --no-extensions -p` process fed a
-   serialized conversation delta file (`delta-<n>.md`) instead of a forked context.
-   Consequences: no prefix-cache reuse, and the delta is condensed (tool I/O clipped to
-   500 chars, file capped at 100KB, newest kept).
+5. **In-process writer fed an inlined delta (not a forked context).** The checkpoint
+   writer runs as an in-process pi SDK session (`createAgentSession` +
+   `SessionManager.inMemory` + a `noExtensions` resource loader), handed the serialized
+   conversation delta **inline** — no subprocess and no `delta-<n>.md` temp file. This
+   removes the per-checkpoint process start and gives the writer state directly from the
+   live parent rather than across a file boundary. It does **not** restore prefix-cache
+   reuse: the writer is still a separate conversation with its own system prompt and tool
+   schema, so its token prefix can't match the parent's. True reuse would require forking
+   the parent's full prefix + tool schema (MiMoCode's `fork=true`), which even MiMoCode
+   leaves off by default — so the delta remains a condensed text handoff (tool I/O clipped
+   to 500 chars, whole delta capped at ~100KB, newest kept). Dream/distill still run as
+   subprocesses (long-running, fire-and-forget, process-isolated).
 6. **No task registry / actor system.** checkpoint.md keeps all 11 sections for
    structural fidelity, but §4 Task tree is pinned to "(no task registry)" and the
    subagent progress machinery is dropped.

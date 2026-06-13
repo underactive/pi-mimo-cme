@@ -1,8 +1,9 @@
 /**
  * Memory-path guard (adapted from MiMoCode's memory-path-guard): the main
  * agent may write ONLY its own notes.md and the project MEMORY.md. The
- * checkpoint writer / dream / distill subprocesses run with --no-extensions,
- * so they are unaffected.
+ * checkpoint writer (in-process, built with a noExtensions resource loader) and
+ * the dream/distill subprocesses (--no-extensions) all run without this
+ * extension bound, so they are unaffected.
  */
 import * as path from "node:path";
 

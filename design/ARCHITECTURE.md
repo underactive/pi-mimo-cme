@@ -20,7 +20,7 @@ have broken the invariant.** The four layers:
 
 | Layer | Artifact | Writer |
 |---|---|---|
-| 1. Session | `sessions/<sid>/checkpoint.md` (11 §) + `notes.md` | checkpoint-writer subprocess (checkpoint.md); main agent (notes.md, append-only) |
+| 1. Session | `sessions/<sid>/checkpoint.md` (11 §) + `notes.md` | in-process checkpoint-writer session (checkpoint.md); main agent (notes.md, append-only) |
 | 2. Project | `projects/<pid>/MEMORY.md` (4 §) | writer + dream; agent may Edit for explicit user rules |
 | 3. Global | `global/MEMORY.md` | dream promotes entries; read-only for the agent |
 | 4. History | every message in `memory.db` (`history_fts` + FTS5) | automatic: `message_end` events + JSONL backfill |
@@ -45,7 +45,7 @@ src/
   templates.ts  checkpoint (11 §) / MEMORY (4 §) / notes templates + section budgets   [pure]
   inject.ts     system-prompt appendix + rebuild-dump assembly
   history.ts    message_end extraction, per-session seq counter, JSONL backfill
-  checkpoint.ts usage thresholds, delta serialization, writer subprocess (queue depth 1), nudges
+  checkpoint.ts usage thresholds, delta serialization, in-process writer via runWriter (queue depth 1), nudges
   guard.ts      path guard for write/edit under the memory root                   [pure]
   tools.ts      `memory` + `history` tool definitions
   commands.ts   /memory /dream /distill, reconcile+notify, status text

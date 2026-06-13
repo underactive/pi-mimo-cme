@@ -81,7 +81,7 @@ src/
   templates.ts    # checkpoint (11 §) / MEMORY (4 §) / notes templates + section budgets   [pure]
   inject.ts       # system-prompt appendix assembly + rebuild-dump assembly
   history.ts      # message_end extraction, per-session seq counter, JSONL backfill
-  checkpoint.ts   # usage thresholds, delta serialization, writer subprocess (queue depth 1), nudges
+  checkpoint.ts   # usage thresholds, delta serialization, in-process writer via runWriter (queue depth 1), nudges
   guard.ts        # path guard for write/edit under the memory root           [pure]
   tools.ts        # `memory` + `history` tool definitions
   commands.ts     # /memory /dream /distill, reconcileAndNotify, status text
@@ -107,7 +107,7 @@ attach handlers, never let a memory failure escape into the session.
 ```mermaid
 flowchart TD
     start([pi loads extension]) --> guard{PI_MIMO_CME_CHILD == 1?}
-    guard -- yes --> noop["return immediately<br/>(this is a writer/dream/distill child)"]
+    guard -- yes --> noop["return immediately<br/>(this is a dream/distill child)"]
     guard -- no --> open["mkdir logs/, loadConfig, openDb,<br/>build notify shim + safe() wrapper"]
     open --> wire["wire pi.on handlers + register tools/commands"]
     wire --> live([session runs])
@@ -119,13 +119,16 @@ flowchart TD
   `try/await/catch`es, and on error logs to `logs/extension.log` and shows *one* throttled
   toast (60s window). **SPEC §9.5: a memory failure must never break the session.** If you
   add a handler, wrap it in `safe()`.
-- **`latestCtx` + `notify` shim.** Background work (the writer, dream, distill) finishes
-  *after* the handler that started it has returned, and the headless children have no UI of
-  their own. They surface results through `latestCtx`, which `safe()` refreshes on every
-  handler call, instead of a captured-at-spawn `ctx` (pi *invalidates* a `ctx` once the user
-  forks/switches sessions). **Post-`await` code must never touch a captured `ctx`** — use the
-  `notify` shim and a captured plain-string `cwd` instead. This footgun is commented at every
-  occurrence; respect it.
+- **`latestCtx` + `notify` shim.** Background work (the in-process writer, dream, distill)
+  finishes *after* the handler that started it has returned, and the dream/distill children
+  have no UI of their own. They surface results through `latestCtx`, which `safe()` refreshes
+  on every handler call, instead of a captured-at-spawn `ctx` (pi *invalidates* a `ctx` once
+  the user forks/switches sessions). The writer leans on this for more than notifications: it
+  pulls `model` + `modelRegistry` from `latestCtx` at run time, because a ctx captured when
+  the checkpoint was queued could be stale by the time the writer actually runs.
+  **Post-`await` code must never touch a captured `ctx`** — use the `notify` shim and a
+  captured plain-string `cwd` instead. This footgun is commented at every occurrence; respect
+  it.
 
 ### Event → handler map
 
@@ -219,9 +222,9 @@ flowchart TD
     end
     subgraph auto["Automated — the only checkpoint curator"]
         t["turn_end: context % crosses threshold"] --> ck[checkpoint.ts maybeCheckpoint]
-        ck --> dlt["serialize conversation delta → delta-n.md"]
-        dlt --> sub["spawn: pi --no-extensions --no-session -p &lt;writer prompt&gt;<br/>env PI_MIMO_CME_CHILD=1"]
-        sub --> wr["child Reads delta + writes checkpoint.md / MEMORY.md<br/>+ wipes notes.md to template"]
+        ck --> dlt["serialize conversation delta (inline in prompt, ≤DELTA_CAP)"]
+        dlt --> sub["runWriter: in-process createAgentSession<br/>noExtensions + SessionManager.inMemory<br/>tools read/write/edit"]
+        sub --> wr["writer reads inlined delta + writes checkpoint.md / MEMORY.md<br/>+ wipes notes.md to template"]
     end
     subgraph hist["Layer 4 — continuous"]
         m["message_end"] --> idx["history.ts indexMessage → history_fts"]
@@ -245,27 +248,39 @@ flowchart TD
 
 This is the most subtle module. The invariants:
 
-- **The extension never writes structured memory in-process.** It spawns a fresh, headless
-  `pi --no-extensions --no-session -p "<writer prompt>"`. The writer prompt
-  (`prompts/checkpoint-writer.ts`) tells the child to Read the serialized `delta-<n>.md` and
-  update `checkpoint.md` / `MEMORY.md`, wiping `notes.md` back to template. pi has no
-  in-process subagent machinery — this subprocess *is* the subagent.
-- **`PI_MIMO_CME_CHILD=1` recursion guard.** Set via a `/usr/bin/env` argv wrapper because
-  pi's `ExecOptions` has **no `env` field**. `index.ts`'s factory returns immediately when
-  it sees this var, so the child can't re-load the extension. Both belts (`--no-extensions`
-  *and* the env guard) are worn deliberately.
-- **`--no-session`** on every child: a print-mode child would otherwise persist its own
-  transcript JSONL into the very directory the layer-4 backfill scans — the memory system
-  would then index its own writer/dream/distill transcripts as "user conversation."
+- **The main agent never writes structured memory itself; a separate writer session does.**
+  `CheckpointManager` takes an injected `runWriter` dependency (defined in `index.ts`) that
+  builds a fresh **in-process pi SDK session** — `createAgentSession({ tools:
+  ["read","write","edit"], resourceLoader: new DefaultResourceLoader({ noExtensions: true,
+  ... }), sessionManager: SessionManager.inMemory(cwd), model/modelRegistry from the live
+  ctx })` — then `await session.prompt(prompt)` and `session.dispose()`. The writer prompt
+  (`prompts/checkpoint-writer.ts`) carries the serialized delta **inline** (between
+  `===== BEGIN CONVERSATION DELTA =====` / `===== END CONVERSATION DELTA =====` markers) and
+  tells the writer to update `checkpoint.md` / `MEMORY.md` and wipe `notes.md` back to
+  template — no `Read` of a temp file needed. There is no subprocess and no `delta-<n>.md`.
+- **`noExtensions` is the recursion guard for the writer.** `DefaultResourceLoader({
+  noExtensions: true })` loads zero extensions, so pi-mimo-cme never binds to the writer
+  session (and there's no env var to set in-process). The old `PI_MIMO_CME_CHILD=1` argv
+  guard — a `/usr/bin/env` wrapper because pi's `ExecOptions` has **no `env` field** — now
+  applies *only* to the dream/distill subprocesses (§6); the factory still returns immediately
+  when it sees that var.
+- **`SessionManager.inMemory()` persists no JSONL.** This replaces the writer's old
+  `--no-session` flag: a print-mode subprocess would otherwise drop its transcript into the
+  very directory the layer-4 backfill scans, and the memory system would index its own writer
+  output as "user conversation." (Dream/distill still pass `--no-session` for the same
+  reason.)
 - **Queue depth 1, newest wins.** One writer runs at a time; a new request while one is
-  running replaces the pending job (its delta range is a strict superset) and deletes the
-  evicted delta file. See `fireCheckpoint`/`run`.
+  running replaces the pending job (its delta range is a strict superset). See
+  `fireCheckpoint`/`run`. *(Unchanged by the in-process move.)*
 - **Delta serialization caps** (`serializeDelta`): tool input/result clipped to 500 chars,
-  whole file capped at `DELTA_FILE_CAP` (100KB) by **dropping the head** (newest content
-  matters most to the writer).
-- **Failure posture:** advance `last_checkpoint_seq` and delete the delta only on exit code
-  0; otherwise keep the delta and increment `consecutiveFailures`; **give up after
-  `maxWriterFailures` (3)** until pi restarts.
+  whole delta capped at `DELTA_CAP` (renamed from `DELTA_FILE_CAP`; still ~100KB) by
+  **dropping the head** (newest content matters most to the writer). The cap now bounds the
+  *inlined* delta text — a token budget, not a file size.
+- **Failure posture:** the writer mirrors pi's print mode — a thrown error, or a final
+  assistant message whose `stopReason` is `"error"`/`"aborted"`, is a failure (it does *not*
+  require non-empty final text; the writer is told to stay silent after its Edits). On
+  success, advance `last_checkpoint_seq`; otherwise increment `consecutiveFailures` and
+  **give up after `maxWriterFailures` (3)** until pi restarts.
 - **`session_before_compact`** fires a checkpoint and `await waitForIdle(60_000)` so state is
   captured *before* pi compacts the context out from under us.
 - **Nudges** (`nudgeFor`): at 70% and 85% usage, once per level per session, inject a
@@ -279,8 +294,9 @@ whose resolved path is under the memory root and allows **only** the current ses
 `notes.md` and the current project's `MEMORY.md`. Everything else under the root
 (`checkpoint.md`, `global/`, other sessions/projects) is blocked with a reason quoting the
 rules (*"checkpoint.md is the writer's domain"*, *"no learning.md / scratch.md — use
-notes.md"*). Writes **outside** the memory root are never touched. The writer/dream/distill
-subprocesses run without the extension, so the guard doesn't apply to them.
+notes.md"*). Writes **outside** the memory root are never touched. The in-process writer
+session (loaded with `noExtensions`) and the dream/distill subprocesses run without the
+extension, so the guard doesn't apply to them.
 
 ---
 
@@ -343,7 +359,7 @@ memory_fts(id, path UNIQUE, scope, scope_id, type, body, fingerprint, last_index
 history_fts(id, session_id, project_id, seq, kind, tool_name, body, time_created)
             UNIQUE(session_id, seq)
 meta(key TEXT PRIMARY KEY, value TEXT)   -- last_checkpoint_seq:<sid>, crossed:<sid>,
-                                         -- delta_n:<sid>, last_dream_at:<pid>,
+                                         -- last_dream_at:<pid>,
                                          -- last_distill_at:<pid>, backfill:<file>
 ```
 
@@ -377,7 +393,7 @@ npm test               # node --test 'test/*.test.ts'  → must be green
    into the session.
 3. Multi-statement DB writes go in transactions (see `migrate`).
 4. Never delete user Markdown in our code. The only wipe is `notes.md` → template, and that
-   happens *in the writer subprocess via its prompt*, not in our code.
+   happens *in the in-process writer session via its prompt*, not in our code.
 5. Tests use `fs.mkdtempSync` + `PI_CODING_AGENT_DIR` override so they never touch the real
    `~/.pi`. Existing coverage: `buildFtsQuery` (OR/AND, punctuation, empty), score floor,
    fingerprint reconcile (add/change/delete), history kind extraction, around-windowing,
@@ -434,9 +450,11 @@ truth invariant: a new layer is Markdown first, index second.
   clobbers earlier handlers' prompt and the base prompt.
 - ❌ Touching a captured `ctx` after an `await` — pi may have invalidated it. Capture a plain
   `cwd` string and use the `notify` shim.
-- ❌ Forgetting `--no-session` on a spawned child — its transcript pollutes the backfill dir.
-- ❌ Forgetting the `PI_MIMO_CME_CHILD=1` env wrapper (or assuming `ExecOptions.env` exists) —
-  infinite extension recursion.
+- ❌ Forgetting `--no-session` on a spawned dream/distill child (or `SessionManager.inMemory`
+  for the in-process writer) — its transcript pollutes the backfill dir.
+- ❌ Forgetting the `PI_MIMO_CME_CHILD=1` env wrapper on a dream/distill child (or assuming
+  `ExecOptions.env` exists), or loading the writer session without `noExtensions` — infinite
+  extension recursion.
 - ❌ Plain `DELETE FROM <fts_idx>` in a trigger — corrupts the external-content vtab (§7).
 - ❌ Writing to the DB without a matching file write — breaks "delete memory.db loses
   nothing."
@@ -457,8 +475,14 @@ Documented in full in the README; the load-bearing ones for a developer:
 3. **Distill auto-off by default** (creating assets is invasive).
 4. **No preStop validators in v1** — the writer prompt's budget text and dream's prune phase
    carry that pressure instead.
-5. **Subprocess writer, not an in-process subagent** — pi has none. Consequence: no
-   prefix-cache reuse; the delta is condensed and fed as a file.
+5. **In-process writer fed an inlined delta** (`createAgentSession` +
+   `SessionManager.inMemory` + a `noExtensions` resource loader), not a subprocess and not a
+   forked context. Removing the subprocess and the temp file also fixes parent-state access
+   (the writer takes `model`/`modelRegistry` live from the parent ctx). It does **not** restore
+   prefix-cache reuse — the writer is still a separate conversation with its own system prompt
+   and tool schema, so the delta stays a condensed text handoff. True reuse would need
+   MiMoCode's `fork=true` (the parent's full prefix + tool schema), which even MiMoCode leaves
+   off by default. Dream/distill remain subprocesses.
 6. **No task registry** — `checkpoint.md §4 Task tree` is pinned to "(no task registry)".
 7. **History keyed by `(session_id, seq)`** with synthetic `message_id = "<sid>#<seq>"` — pi
    exposes messages, not parts.
