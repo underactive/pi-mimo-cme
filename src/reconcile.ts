@@ -157,7 +157,9 @@ export function reconcile(db: DatabaseSync, opts: ReconcileOptions): ReconcileSt
       stats.indexed += 1;
       if (file.scope === "global") stats.globalIndexed += 1;
     }
-    // Prune rows whose file vanished (covers walked scopes and toggled-off cc).
+    // Prune any indexed row not produced by the current walk — covers both
+    // deleted files and scopes no longer walked (e.g. cc once ccIndex is toggled
+    // off, whose files still exist on disk but must leave the index).
     const allRows = db.prepare("SELECT id, path FROM memory_fts").all() as unknown as {
       id: number;
       path: string;
@@ -165,10 +167,8 @@ export function reconcile(db: DatabaseSync, opts: ReconcileOptions): ReconcileSt
     const del = db.prepare("DELETE FROM memory_fts WHERE id = ?");
     for (const row of allRows) {
       if (seen.has(row.path)) continue;
-      if (!fs.existsSync(row.path)) {
-        del.run(row.id);
-        stats.removed += 1;
-      }
+      del.run(row.id);
+      stats.removed += 1;
     }
     db.exec("COMMIT");
   } catch (err) {
