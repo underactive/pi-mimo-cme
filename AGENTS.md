@@ -81,4 +81,10 @@ There is **no build, lint, or bundle step.** Tests cover the pure / pure-ish mod
   empty and §4 renders "(no subagents this session)" — nothing breaks. Gate it off with `"tasks": { "enabled": false }`.
   Bus handlers run OUTSIDE the `safe()` lifecycle path, so they wrap their own try/catch and unsubscribe on
   `session_shutdown` before `db.close()`. `actors.ts` is a **pure module** (no pi import) so it unit-tests under
-  `node --test` — keep it that way.
+  `node --test` — keep it that way. **Scope: background subagents only.** pi-subagents emits `created` + the terminal
+  `completed`/`failed` events ONLY for background agents (`agent-manager.js` gates `onComplete` on `isBackground`);
+  foreground agents emit just `started` and return their result inline (already in the conversation delta). So
+  `created` is the only event that introduces a ledger row — every other phase is gated on an existing row, which
+  also handles pi-subagents firing `started` BEFORE `created` for non-queued background agents (the orphan `started`
+  is dropped). Note `tokens` arrives as a `{input,output,total}` object, not a scalar — `asTokenCount` unwraps it.
+  Verify the live event surface with `scripts/smoke-subagents.sh` (isolated agent dir; borrows real auth).

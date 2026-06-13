@@ -537,8 +537,11 @@ export default function piMimoCme(pi: ExtensionAPI) {
     const recordActor = (phase: ActorPhase) => (data: unknown) => {
       const ctx = latestCtx; // attribute the actor to whatever session is live now
       if (!ctx) return;
-      const wrote = ledger.record(phase, sidOf(ctx), projectId(ctx.cwd), (data ?? {}) as ActorEvent);
-      if (wrote) log(`actor ${phase}: wrote ${wrote}`);
+      const ev = (data ?? {}) as ActorEvent;
+      const wrote = ledger.record(phase, sidOf(ctx), projectId(ctx.cwd), ev);
+      // Trace every observed event (file log only) — the real channel sequence is
+      // what the smoke test and any future debugging need to see.
+      log(`actor ${phase}: id=${typeof ev.id === "string" ? ev.id : "?"}${wrote ? ` → wrote ${wrote}` : ""}`);
       refreshStatus(ctx); // active-actor count may have changed
     };
     const onBus = (channel: string, handler: (data: unknown) => void): void => {

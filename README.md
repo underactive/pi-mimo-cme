@@ -169,7 +169,11 @@ Deliberate adaptations, in roughly decreasing order of consequence:
    optional dependency: no `import`, no spawn RPC, purely serializable event payloads —
    and derives an `actor` ledger plus per-subagent `progress.md` journals under
    `sessions/<sid>/tasks/<id>/` (synthesized from completion payloads, since we can't run
-   a `postStop` hook inside another extension's subagent). checkpoint §4 (renamed Task
+   a `postStop` hook inside another extension's subagent). The ledger is scoped to
+   **background** subagents: pi-subagents emits `created` and the terminal
+   `completed`/`failed` events only for background agents — foreground agents emit just
+   `started` and return their result inline, so the conversation delta already captures
+   them. (Verified end-to-end against live pi-subagents via `scripts/smoke-subagents.sh`.) checkpoint §4 (renamed Task
    tree → Subagents) is reconciled from that ledger via an inlined SUBAGENT PROGRESS
    block, and the rebuild dump surfaces in-flight actors under `## Active actors`. What
    MiMoCode had that we still don't: the *user task graph* (`task`/`task_event`) —

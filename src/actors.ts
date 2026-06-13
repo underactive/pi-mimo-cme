@@ -61,6 +61,23 @@ function asString(v: unknown): string {
 function asInt(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0;
 }
+/**
+ * Extract a token count from a pi-subagents payload. `tokens` is emitted as an
+ * object `{ input, output, total }` (or `undefined` when nothing was produced),
+ * NOT a scalar — `subagents:completed` in pi-subagents@0.10.x. `tokensBefore`
+ * (compacted) is a plain number. Accept both shapes so the ledger records real
+ * usage instead of silently storing 0.
+ */
+function asTokenCount(v: unknown): number {
+  if (typeof v === "number") return asInt(v);
+  if (v && typeof v === "object") {
+    const total = (v as { total?: unknown }).total;
+    if (typeof total === "number") return asInt(total);
+  }
+  return 0;
+}
+/** Terminal statuses pi-subagents reports on subagents:completed|failed payloads. */
+const TERMINAL_STATUSES = new Set(["completed", "error", "stopped", "aborted"]);
 function clip(text: string, cap: number): string {
   return text.length <= cap ? text : text.slice(0, cap) + "…";
 }
@@ -113,6 +130,7 @@ export class ActorLedger {
   private now: () => number;
   private upsertMain: StatementSync;
   private upsertCompacted: StatementSync;
+  private existsStmt!: StatementSync;
   /**
    * In-memory set of non-terminal actor IDs per session — the footer's
    * active-count source (O(1), zero SQL on the hot path). Intentionally process-
@@ -154,26 +172,51 @@ export class ActorLedger {
          compaction_count = MAX(actor.compaction_count, excluded.compaction_count),
          updated_at = excluded.updated_at`,
     );
+    this.existsStmt = this.db.prepare("SELECT 1 FROM actor WHERE session_id = ? AND id = ? LIMIT 1");
+  }
+
+  private exists(sid: string, id: string): boolean {
+    return this.existsStmt.get(sid, id) !== undefined;
   }
 
   /**
    * Record one lifecycle event. Returns the progress.md path it wrote (on
-   * completed/failed) or undefined. A missing/blank actor id is ignored — we
-   * can't key a ledger row without it.
+   * completed/failed) or undefined.
+   *
+   * SCOPE: the ledger tracks BACKGROUND subagents only. pi-subagents emits
+   * `subagents:created` exclusively in its background branch and fires the
+   * terminal `completed`/`failed` events only for background agents
+   * (agent-manager.js gates `onComplete` on `isBackground`). FOREGROUND agents
+   * emit just `started` and return their result inline to the caller — already
+   * in the conversation, so the checkpoint delta captures it without us. We
+   * therefore let ONLY `created` introduce a row and gate every other phase on
+   * an existing row. This both targets the out-of-band results worth keeping and
+   * avoids a foreground agent (which never emits a terminal event) lingering as
+   * "running" forever. It's robust to pi-subagents emitting `started` before
+   * `created` for non-queued background agents — the orphan `started` is simply
+   * dropped and `created` establishes the row a moment later.
+   *
+   * A missing/blank actor id is ignored — we can't key a row without it.
    */
   record(phase: ActorPhase, sid: string, pid: string, ev: ActorEvent): string | undefined {
     const id = asString(ev.id).trim();
     if (!id) return undefined;
+    if (phase !== "created" && !this.exists(sid, id)) return undefined; // foreground / orphan event
     const ts = this.now();
     const type = asString(ev.type);
     const description = asString(ev.description);
 
     if (phase === "compacted") {
-      this.upsertCompacted.run(sid, id, pid, type, description, asInt(ev.tokensBefore), asInt(ev.compactionCount), ts, ts);
+      this.upsertCompacted.run(sid, id, pid, type, description, asTokenCount(ev.tokensBefore), asInt(ev.compactionCount), ts, ts);
       return undefined;
     }
 
     const terminal = phase === "completed" || phase === "failed";
+    // created → "created"; started → "running"; terminal → pi-subagents' own
+    // status (completed/error/stopped/aborted) when present, else phase default
+    // (so a stopped/aborted subagent isn't flattened to "error").
+    const payloadStatus = asString(ev.status);
+    const status = terminal && TERMINAL_STATUSES.has(payloadStatus) ? payloadStatus : statusFor(phase);
     const resultSummary = clip(asString(ev.result), RESULT_CAP);
     const errorText = clip(asString(ev.error), RESULT_CAP);
     this.upsertMain.run(
@@ -182,8 +225,8 @@ export class ActorLedger {
       pid,
       type,
       description,
-      statusFor(phase),
-      asInt(ev.tokens),
+      status,
+      asTokenCount(ev.tokens),
       asInt(ev.toolUses),
       0,
       resultSummary,
@@ -193,10 +236,11 @@ export class ActorLedger {
       terminal ? ts : null,
     );
 
-    // Track the live active set for the footer.
+    // Live active set for the footer: a background agent enters on `created` and
+    // leaves on its terminal event; `started`/`compacted` don't change membership.
     const set = this.activeIds.get(sid) ?? new Set<string>();
-    if (terminal) set.delete(id);
-    else set.add(id);
+    if (phase === "created") set.add(id);
+    else if (terminal) set.delete(id);
     this.activeIds.set(sid, set);
 
     if (terminal) return this.writeProgress(sid, id, ev, phase, ts);
@@ -239,7 +283,7 @@ export class ActorLedger {
       ...ev,
       type: asString(ev.type) || row?.type || "",
       description: asString(ev.description) || row?.description || "",
-      tokens: asInt(ev.tokens) || row?.tokens || 0,
+      tokens: asTokenCount(ev.tokens) || row?.tokens || 0,
       toolUses: asInt(ev.toolUses) || row?.tool_uses || 0,
     };
     const file = progressPath(sid, id, this.root);
@@ -261,7 +305,8 @@ export function renderProgressJournal(
   phase: ActorPhase,
   isoTime: string,
 ): string {
-  const status = statusFor(phase);
+  const payloadStatus = asString(ev.status);
+  const status = TERMINAL_STATUSES.has(payloadStatus) ? payloadStatus : statusFor(phase);
   const type = asString(ev.type) || "(unknown)";
   const description = asString(ev.description).trim() || "(none)";
   const result = clip(asString(ev.result).trim(), RESULT_CAP) || "(no result text)";
@@ -269,7 +314,7 @@ export function renderProgressJournal(
   const meta = [
     `**Type:** ${type}`,
     `**Status:** ${status}`,
-    `**Tokens:** ${asInt(ev.tokens)}`,
+    `**Tokens:** ${asTokenCount(ev.tokens)}`,
     `**Tool uses:** ${asInt(ev.toolUses)}`,
     `**Duration:** ${asInt(ev.durationMs)}ms`,
   ].join(" · ");

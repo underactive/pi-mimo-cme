@@ -61,7 +61,9 @@ test("buildRebuildDump surfaces in-flight actors under ## Active actors", () => 
   // A real checkpoint, so the dump isn't skipped as empty.
   write(root, "sessions/s1/checkpoint.md", '# Session checkpoint\n\n## §1 Active intent\n> "do the thing"\n');
   const ledger = new ActorLedger({ db, root });
+  ledger.record("created", "s1", pid, { id: "live1", type: "explore", description: "scanning the tree" });
   ledger.record("started", "s1", pid, { id: "live1", type: "explore", description: "scanning the tree" });
+  ledger.record("created", "s1", pid, { id: "done1" });
   ledger.record("completed", "s1", pid, { id: "done1", result: "finished" });
 
   const ctx: InjectContext = { root, sid: "s1", pid, caps: DEFAULT_CONFIG.checkpoint.pushCaps };

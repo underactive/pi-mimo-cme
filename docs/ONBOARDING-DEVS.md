@@ -431,6 +431,20 @@ PI_CODING_AGENT_DIR=$(mktemp -d) pi -e ./src/index.ts \
 sqlite3 "$PI_CODING_AGENT_DIR/pi-mimo-cme/memory.db" ".tables"
 ```
 
+**Phase 2 subagent layer — full live verification:**
+
+```sh
+# Isolated agent dir, installs @tintinweb/pi-subagents, spawns a real background
+# subagent, then asserts the actor row + progress.md journal + §4 block. Borrows
+# your real auth.json so the headless run authenticates. KEEP=1 preserves the dir.
+KEEP=1 ./scripts/smoke-subagents.sh
+```
+
+This is the only check that proves the live `pi.events` channel names + payload shapes
+(notably `tokens` as a `{input,output,total}` object) match `actors.ts` — unit tests
+author their own payloads and so can't. It already caught one real bug (tokens stored as
+0). Background subagents are required: foreground ones emit no terminal event (see §11.6).
+
 ---
 
 ## 9. Extending it — recipes
@@ -505,7 +519,13 @@ Documented in full in the README; the load-bearing ones for a developer:
    Subagents) is reconciled from `actors.ts`, which observes `@tintinweb/pi-subagents` events
    over `pi.events` (soft/optional dep). We get the *actor* half (who ran, status, result), not
    MiMoCode's user *task graph* (`task`/`task_event`). pi-subagents absent ⇒ §4 renders
-   "(no subagents this session)". Gate with `"tasks": { "enabled": false }`.
+   "(no subagents this session)". Gate with `"tasks": { "enabled": false }`. **Scoped to
+   background subagents:** pi-subagents emits `created` + terminal `completed`/`failed` only for
+   background agents (foreground agents emit just `started` and return inline → already in the
+   delta), so `created` is the sole row-introducer and other phases are gated on an existing row
+   (also absorbs the `started`-before-`created` ordering). `tokens` is a `{input,output,total}`
+   object, not a scalar (`asTokenCount` unwraps it). Verified live via
+   `scripts/smoke-subagents.sh`.
 7. **History keyed by `(session_id, seq)`** with synthetic `message_id = "<sid>#<seq>"` — pi
    exposes messages, not parts.
 8. **Auto-pass scheduling in `meta`**, first sighting starts the clock.
