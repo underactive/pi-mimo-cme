@@ -23,11 +23,11 @@ and smaller; the lower layers are more complete, larger, and slower."
 
 ## 1. Storage layout
 
-Root: `path.join(getAgentDir(), "memory")` → `~/.pi/agent/memory/` (respects
+Root: `path.join(getAgentDir(), "memory")` → `~/.pi/agent/pi-mimo-cme/` (respects
 `PI_CODING_AGENT_DIR`).
 
 ```
-~/.pi/agent/memory/
+~/.pi/agent/pi-mimo-cme/
 ├── memory.db                      # SQLite: FTS index over files + history layer + meta
 ├── config.json                    # optional user overrides (see §8)
 ├── logs/                          # headless writer/dream/distill run logs
@@ -271,7 +271,7 @@ test/*.test.ts      # node:test, runs with plain `node --test` (erasable TS)
 README.md           # what/why, CME mapping, four layers, install, config, divergences from MiMoCode
 ```
 
-## 8. Config (`~/.pi/agent/memory/config.json`, all optional)
+## 8. Config (`~/.pi/agent/pi-mimo-cme/config.json`, all optional)
 
 ```jsonc
 {
