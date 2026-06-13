@@ -143,6 +143,22 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
     ctx.ui.notify(`mimo-cme: ${label} queued — runs after the current turn`, "info");
   };
 
+  // Display-only readouts (status / search). Pi renders a custom message in the
+  // UI ONLY via sendCustomMessage's non-streaming, no-trigger path (it emits
+  // message_start/_end there). deliverAs:"nextTurn" instead parks the message in
+  // _pendingNextTurnMessages — an invisible "aside" merged into the next request
+  // as context and never rendered — which is why /memory printed nothing. We also
+  // can't reach the render path mid-stream without steering the readout into the
+  // agent's live turn, and these readouts are instant to re-run, so when busy we
+  // ask the user to retry rather than disrupt the turn.
+  const showReadout = (ctx: ExtensionCommandContext, customType: string, content: string): void => {
+    if (!ctx.isIdle()) {
+      ctx.ui.notify("mimo-cme: agent is busy — run that again when idle", "warning");
+      return;
+    }
+    pi.sendMessage({ customType, content, display: true });
+  };
+
   pi.registerCommand("dream", {
     description: "mimo-cme: consolidate durable memory from recent sessions (manual dream pass)",
     handler: async (_args, ctx) => {
@@ -191,21 +207,11 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
           hits.length === 0
             ? `no memory hits for "${query}"`
             : hits.map((h) => `${h.score.toFixed(2)}  ${h.path}\n      ${h.snippet}`).join("\n");
-        pi.sendMessage(
-          { customType: "mimo-cme:search", content: `memory search "${query}"\n\n${text}`, display: true },
-          { deliverAs: "nextTurn" },
-        );
+        showReadout(ctx, "mimo-cme:search", `memory search "${query}"\n\n${text}`);
         return;
       }
       // default / "status"
-      pi.sendMessage(
-        {
-          customType: "mimo-cme:status",
-          content: statusText(deps, ctx.cwd, ctx.sessionManager.getSessionId()),
-          display: true,
-        },
-        { deliverAs: "nextTurn" },
-      );
+      showReadout(ctx, "mimo-cme:status", statusText(deps, ctx.cwd, ctx.sessionManager.getSessionId()));
     },
   });
 }

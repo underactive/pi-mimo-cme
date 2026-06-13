@@ -124,7 +124,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
       .map((e) => (e as { message: unknown }).message);
 
   /**
-   * Live footer: `🧠 mem · <idx> idx · <hist> hist`.
+   * Live footer: `🧠 <idx> idx · <hist> hist`.
    *   idx  = rows in memory_fts  — every indexed memory layer (global/project/
    *          session markdown); the agent's recallable knowledge, global.
    *   hist = rows in history_fts for THIS project — the layer-4 capture.
@@ -143,7 +143,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
     if (!ctx.hasUI) return;
     const idx = (countMemoryRows.get() as { n: number }).n;
     const hist = (countProjectHistoryRows.get(projectId(ctx.cwd)) as { n: number }).n;
-    ctx.ui.setStatus("mimo-cme", `🧠 mem · ${idx} idx · ${hist} hist`);
+    ctx.ui.setStatus("mimo-cme", `🧠 ${idx} idx · ${hist} hist`);
   }
 
   /**

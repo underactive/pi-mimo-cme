@@ -111,7 +111,7 @@ That's it. pi loads the TypeScript directly — there is nothing to compile.
 Start pi normally. Within a couple of seconds you should see a status footer:
 
 ```
-🧠 mem · 0 idx · 0 hist
+🧠 0 idx · 0 hist
 ```
 
 - `idx` = how many memory files are indexed (Markdown layers).
@@ -158,7 +158,7 @@ sequenceDiagram
 
 | You see… | It means… |
 |---|---|
-| `🧠 mem · 12 idx · 240 hist` in the footer | extension live; 12 memory files indexed, 240 history rows for this project |
+| `🧠 12 idx · 240 hist` in the footer | extension live; 12 memory files indexed, 240 history rows for this project |
 | `💾 mimo-cme: checkpoint saved — session memory written` | context crossed a threshold; your session was snapshotted to `checkpoint.md` |
 | `🔄 mimo-cme: memory indexed — N indexed` | the search index picked up a memory file that changed on disk |
 | `🌙 mimo-cme: dream consolidation running in background` | the weekly consolidation pass started |
