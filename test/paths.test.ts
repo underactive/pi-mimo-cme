@@ -27,7 +27,7 @@ test("agentDir / memoryRoot respect PI_CODING_AGENT_DIR", () => {
   try {
     process.env["PI_CODING_AGENT_DIR"] = dir;
     assert.equal(agentDir(), dir);
-    assert.equal(memoryRoot(), path.join(dir, "memory"));
+    assert.equal(memoryRoot(), path.join(dir, "pi-mimo-cme"));
   } finally {
     if (prev === undefined) delete process.env["PI_CODING_AGENT_DIR"];
     else process.env["PI_CODING_AGENT_DIR"] = prev;

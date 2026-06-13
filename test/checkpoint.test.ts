@@ -78,7 +78,7 @@ test("newlyCrossed returns ascending uncrossed thresholds", () => {
 
 test("CheckpointManager: fires once per threshold, writes delta, advances seq on success", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cp-"));
-  const root = path.join(agent, "memory");
+  const root = path.join(agent, "pi-mimo-cme");
   const db = openDb(":memory:");
   const execCalls: string[][] = [];
   let execResolve: (() => void) | undefined;
@@ -139,7 +139,7 @@ test("CheckpointManager: fires once per threshold, writes delta, advances seq on
 
 test("CheckpointManager: keeps delta and gives up after max consecutive failures", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpf-"));
-  const root = path.join(agent, "memory");
+  const root = path.join(agent, "pi-mimo-cme");
   const db = openDb(":memory:");
   let calls = 0;
   const manager = new CheckpointManager({

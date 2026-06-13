@@ -24,7 +24,11 @@ function expandTilde(p: string): string {
 }
 
 export function memoryRoot(): string {
-  return path.join(agentDir(), "memory");
+  // Unique root under pi's agent dir (NOT the generic "memory" — that name is the
+  // most collision-prone and the likeliest segment a future pi-native memory
+  // feature would claim). The package name is globally unique, so subfolders
+  // (projects/, sessions/, global/) underneath need no further prefixing.
+  return path.join(agentDir(), "pi-mimo-cme");
 }
 
 export function dbPath(root: string = memoryRoot()): string {
