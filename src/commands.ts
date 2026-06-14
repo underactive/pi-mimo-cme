@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { CmeConfig } from "./config.ts";
-import { metaGet, writerMetricsSummary } from "./db.ts";
+import { metaGet, validationSummary, writerMetricsSummary } from "./db.ts";
 import type { FooterCounts } from "./footer-counts.ts";
 import { memorySearch } from "./fts.ts";
 import {
@@ -167,6 +167,48 @@ export function metricsText(deps: CommandDeps, cwd: string): string {
   ].join("\n");
 }
 
+/**
+ * CHECKPOINT-VALIDATOR-PLAN Phase 1 readout: turns the recorded
+ * checkpoint_validations rows into the "measure first" histogram that gates
+ * Phase 2 (retry + revert). The three numbers that decide whether to enable
+ * enforcement are surfaced directly: how often anything fires (clean rate),
+ * which codes dominate, and how big budget overruns get.
+ */
+export function validationText(deps: CommandDeps, cwd: string): string {
+  const pid = projectId(cwd);
+  const proj = validationSummary(deps.db, { projectId: pid });
+  const all = validationSummary(deps.db);
+  if (all.n === 0) {
+    return [
+      'mimo-cme checkpoint validations (Phase 1 "measure first")',
+      "",
+      "no checkpoints validated yet. Run a session past a context threshold",
+      "(20/40/60/80%) so the in-process writer fires, then re-run",
+      "/memory validations to see how the writer's output scores against the spec.",
+    ].join("\n");
+  }
+  const pct = (part: number, whole: number) => (whole === 0 ? "0%" : `${Math.round((part / whole) * 100)}%`);
+  const hist = Object.entries(proj.codeHistogram).sort((a, b) => b[1] - a[1]);
+  const histText = hist.length === 0 ? "    (none)" : hist.map(([c, n]) => `    ${c}: ${n}`).join("\n");
+  return [
+    'mimo-cme checkpoint validations (Phase 1 "measure first")',
+    "",
+    `this project (${pid}): ${proj.n} checkpoint(s) validated`,
+    `  clean (no error/extract):  ${proj.cleanCount} (${pct(proj.cleanCount, proj.n)})`,
+    `  with error:                ${proj.withError} (${pct(proj.withError, proj.n)})`,
+    `  with extract-required:     ${proj.withExtract} (${pct(proj.withExtract, proj.n)})`,
+    `  with warn:                 ${proj.withWarn} (${pct(proj.withWarn, proj.n)})`,
+    `  avg violations/run:        error≈${proj.avgError.toFixed(2)} extract≈${proj.avgExtract.toFixed(2)} warn≈${proj.avgWarn.toFixed(2)}`,
+    `  worst budget overrun:      ${proj.maxOverrunPct}%`,
+    `  code histogram (runs):`,
+    histText,
+    "",
+    `Phase 2 (retry + revert) is gated on this data — see docs/FUTURE-IMPROVEMENTS.md.`,
+    "",
+    `all projects: ${all.n} validated, ${all.cleanCount} clean (${pct(all.cleanCount, all.n)})`,
+  ].join("\n");
+}
+
 export function buildDreamPrompt(deps: CommandDeps, cwd: string): string {
   const pid = projectId(cwd);
   return dreamPrompt({
@@ -236,9 +278,9 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   });
 
   pi.registerCommand("memory", {
-    description: "mimo-cme: status | search <query> | metrics | dream | distill",
+    description: "mimo-cme: status | search <query> | metrics | validations | dream | distill",
     getArgumentCompletions: (prefix) =>
-      ["status", "search", "metrics", "dream", "distill"]
+      ["status", "search", "metrics", "validations", "dream", "distill"]
         .filter((s) => s.startsWith(prefix))
         .map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
@@ -249,6 +291,10 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       }
       if (trimmed === "metrics") {
         showReadout(ctx, "mimo-cme:metrics", metricsText(deps, ctx.cwd));
+        return;
+      }
+      if (trimmed === "validations") {
+        showReadout(ctx, "mimo-cme:validations", validationText(deps, ctx.cwd));
         return;
       }
       if (trimmed === "distill") {

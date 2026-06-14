@@ -13,6 +13,8 @@ import {
   type WriterResult,
 } from "../src/checkpoint.ts";
 import { openDb } from "../src/db.ts";
+import { checkpointPath } from "../src/paths.ts";
+import { CHECKPOINT_TEMPLATE } from "../src/templates.ts";
 
 test("serializeDelta: role labels, condensed tool calls/results", () => {
   const out = serializeDelta([
@@ -433,4 +435,67 @@ test("CheckpointManager: nudges fire once per level, 85% covers 70%", () => {
   assert.match(manager.nudgeFor("s2", 90)!, /filling up/);
   assert.equal(manager.nudgeFor("s2", 91), undefined);
   db.close();
+});
+
+test("CheckpointManager: records one checkpoint_validations row per successful run (Phase 1)", async () => {
+  const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpv-"));
+  const root = path.join(agent, "pi-mimo-cme");
+  const db = openDb(":memory:");
+  // The writer "produces" an in-spec checkpoint: the template with §1 filled in.
+  const validCp = CHECKPOINT_TEMPLATE.replace(
+    "## §1 Active intent\n_Verbatim user request, block-quoted. This is ground truth — do not paraphrase._\n(none yet)",
+    '## §1 Active intent\n_Verbatim user request, block-quoted. This is ground truth — do not paraphrase._\n> "do the thing"',
+  );
+  const manager = new CheckpointManager({
+    db,
+    root,
+    thresholds: [20],
+    maxWriterFailures: 3,
+    log: () => {},
+    runWriter: async () => {
+      fs.writeFileSync(checkpointPath("s1", root), validCp);
+      return { ok: true } satisfies WriterResult;
+    },
+  });
+  manager.fireCheckpoint({ sid: "s1", pid: "p1", cwd: "/w", messages: [{ role: "user", content: "do the thing" }] });
+  await manager.waitForIdle(1000);
+
+  const rows = db
+    .prepare("SELECT n_error, n_extract, ended_valid FROM checkpoint_validations WHERE session_id = 's1'")
+    .all() as { n_error: number; n_extract: number; ended_valid: number }[];
+  assert.equal(rows.length, 1, "exactly one validation row per run");
+  assert.equal(rows[0]!.n_error, 0, "an in-spec checkpoint has no errors");
+  assert.equal(rows[0]!.n_extract, 0);
+  assert.equal(rows[0]!.ended_valid, 1);
+  db.close();
+  fs.rmSync(agent, { recursive: true, force: true });
+});
+
+test("CheckpointManager: validation row flags an out-of-spec write but never blocks the checkpoint", async () => {
+  const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpv0-"));
+  const root = path.join(agent, "pi-mimo-cme");
+  const db = openDb(":memory:");
+  // The writer leaves the bare template (§1 still "(none yet)" → out of spec).
+  const manager = new CheckpointManager({
+    db,
+    root,
+    thresholds: [20],
+    maxWriterFailures: 3,
+    log: () => {},
+    runWriter: async () => ({ ok: true }) satisfies WriterResult,
+  });
+  manager.fireCheckpoint({ sid: "s1", pid: "p1", cwd: "/w", messages: [{ role: "user", content: "go" }] });
+  await manager.waitForIdle(1000);
+
+  const row = db
+    .prepare("SELECT n_error, codes, ended_valid FROM checkpoint_validations WHERE session_id = 's1'")
+    .get() as { n_error: number; codes: string; ended_valid: number };
+  assert.ok(row.n_error >= 1, "the bare template is out of spec");
+  assert.ok(row.codes.includes("intent-no-verbatim"));
+  assert.equal(row.ended_valid, 0);
+  // Phase 1 is observe-only: the write still succeeded, so seq advanced.
+  const seq = db.prepare("SELECT value FROM meta WHERE key = 'last_checkpoint_seq:s1'").get() as { value: string };
+  assert.equal(seq.value, "1");
+  db.close();
+  fs.rmSync(agent, { recursive: true, force: true });
 });

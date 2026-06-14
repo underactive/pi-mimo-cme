@@ -146,8 +146,36 @@ CREATE INDEX writer_metrics_session_idx ON writer_metrics (session_id, ts);
 CREATE INDEX writer_metrics_project_idx ON writer_metrics (project_id, ts);
 `;
 
+/**
+ * CHECKPOINT-VALIDATOR-PLAN Phase 1 ("log-only"): one row per checkpoint-writer
+ * run, recording how the just-written checkpoint scored against the spec
+ * validator (severity counts + the codes that fired + the worst budget overrun).
+ * Phase 1 only OBSERVES — `reflection_attempts` / `reverted` stay 0 — but
+ * `ended_valid` is meaningful from day one (1 ⇔ no error/extract violations).
+ * Phase 2 fills the remaining columns when retry + revert land. A derived table
+ * like every other here: dropping it loses only the quality log.
+ */
+const SCHEMA_V4 = `
+CREATE TABLE checkpoint_validations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+  session_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  n_error INTEGER NOT NULL DEFAULT 0,
+  n_extract INTEGER NOT NULL DEFAULT 0,
+  n_warn INTEGER NOT NULL DEFAULT 0,
+  codes TEXT NOT NULL DEFAULT '',
+  max_section_overrun_pct INTEGER NOT NULL DEFAULT 0,
+  reflection_attempts INTEGER NOT NULL DEFAULT 0,
+  ended_valid INTEGER NOT NULL DEFAULT 1,
+  reverted INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX checkpoint_validations_session_idx ON checkpoint_validations (session_id, ts);
+CREATE INDEX checkpoint_validations_project_idx ON checkpoint_validations (project_id, ts);
+`;
+
 /** Sequential migrations keyed by PRAGMA user_version. */
-const MIGRATIONS: string[] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3];
+const MIGRATIONS: string[] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
 
 export function openDb(file: string): DatabaseSync {
   if (file !== ":memory:") {
@@ -302,5 +330,115 @@ export function writerMetricsSummary(
     avgDeltaTokensEst: num(row["avg_delta_tok"]),
     avgParentTokens: row["avg_parent_tokens"] == null ? null : Number(row["avg_parent_tokens"]),
     avgDurationMs: num(row["avg_duration"]),
+  };
+}
+
+/** One checkpoint validation result (see SCHEMA_V4). */
+export interface ValidationRow {
+  sessionId: string;
+  projectId: string;
+  ts: number;
+  nError: number;
+  nExtract: number;
+  nWarn: number;
+  /** Comma-joined distinct violation codes that fired (may be empty). */
+  codes: string;
+  /** Worst budget overrun (%) this run, 0 when no section was over budget. */
+  maxSectionOverrunPct: number;
+  /** True ⇔ no error/extract violations. Phase 1 records it; Phase 2 acts on it. */
+  endedValid: boolean;
+  /** Phase 2: reflection retries used. Phase 1 always 0. */
+  reflectionAttempts?: number;
+  /** Phase 2: the write was reverted. Phase 1 always false. */
+  reverted?: boolean;
+}
+
+export function recordValidation(db: DatabaseSync, row: ValidationRow): void {
+  db.prepare(
+    `INSERT INTO checkpoint_validations
+      (session_id, project_id, ts, n_error, n_extract, n_warn, codes,
+       max_section_overrun_pct, reflection_attempts, ended_valid, reverted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    row.sessionId,
+    row.projectId,
+    row.ts,
+    row.nError,
+    row.nExtract,
+    row.nWarn,
+    row.codes,
+    row.maxSectionOverrunPct,
+    row.reflectionAttempts ?? 0,
+    row.endedValid ? 1 : 0,
+    row.reverted ? 1 : 0,
+  );
+}
+
+/** Aggregate of recorded validations — the Phase 1 "measure first" readout. */
+export interface ValidationSummary {
+  /** Total checkpoints validated. */
+  n: number;
+  /** Validated with no error/extract violations. */
+  cleanCount: number;
+  withError: number;
+  withExtract: number;
+  withWarn: number;
+  avgError: number;
+  avgExtract: number;
+  avgWarn: number;
+  /** Worst budget overrun (%) seen across all runs in scope. */
+  maxOverrunPct: number;
+  /** code → number of runs in which it fired (the histogram the plan asks for). */
+  codeHistogram: Record<string, number>;
+}
+
+/**
+ * Aggregates checkpoint_validations, optionally scoped to one project. The
+ * code histogram is tallied in JS from the comma-joined `codes` column (one
+ * count per run a code appeared in) — cheap for a readout, and it keeps the
+ * schema a single flat table rather than a per-code child table.
+ */
+export function validationSummary(
+  db: DatabaseSync,
+  opts: { projectId?: string } = {},
+): ValidationSummary {
+  const where = opts.projectId ? "WHERE project_id = ?" : "";
+  const params = opts.projectId ? [opts.projectId] : [];
+  const row = db
+    .prepare(
+      `SELECT
+         COUNT(*) AS n,
+         COALESCE(SUM(CASE WHEN n_error = 0 AND n_extract = 0 THEN 1 ELSE 0 END), 0) AS clean_count,
+         COALESCE(SUM(CASE WHEN n_error > 0 THEN 1 ELSE 0 END), 0) AS with_error,
+         COALESCE(SUM(CASE WHEN n_extract > 0 THEN 1 ELSE 0 END), 0) AS with_extract,
+         COALESCE(SUM(CASE WHEN n_warn > 0 THEN 1 ELSE 0 END), 0) AS with_warn,
+         AVG(n_error) AS avg_error,
+         AVG(n_extract) AS avg_extract,
+         AVG(n_warn) AS avg_warn,
+         COALESCE(MAX(max_section_overrun_pct), 0) AS max_overrun
+       FROM checkpoint_validations ${where}`,
+    )
+    .get(...params) as Record<string, number | null>;
+  const codeRows = db
+    .prepare(`SELECT codes FROM checkpoint_validations ${where}`)
+    .all(...params) as unknown as { codes: string }[];
+  const codeHistogram: Record<string, number> = {};
+  for (const r of codeRows) {
+    for (const c of (r.codes || "").split(",").filter(Boolean)) {
+      codeHistogram[c] = (codeHistogram[c] ?? 0) + 1;
+    }
+  }
+  const num = (x: number | null | undefined) => (x == null ? 0 : Number(x));
+  return {
+    n: num(row["n"]),
+    cleanCount: num(row["clean_count"]),
+    withError: num(row["with_error"]),
+    withExtract: num(row["with_extract"]),
+    withWarn: num(row["with_warn"]),
+    avgError: num(row["avg_error"]),
+    avgExtract: num(row["avg_extract"]),
+    avgWarn: num(row["avg_warn"]),
+    maxOverrunPct: num(row["max_overrun"]),
+    codeHistogram,
   };
 }

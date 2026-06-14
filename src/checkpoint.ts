@@ -5,7 +5,8 @@
  */
 import * as fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { metaGet, metaSet, recordWriterMetrics } from "./db.ts";
+import { validateCheckpoint, summarizeViolations } from "./checkpoint-validator.ts";
+import { metaGet, metaSet, recordValidation, recordWriterMetrics } from "./db.ts";
 import { checkpointPath, notesPath, projectMemoryPath, sessionDir } from "./paths.ts";
 import { checkpointWriterPrompt } from "./prompts/checkpoint-writer.ts";
 import { CHECKPOINT_TEMPLATE, MEMORY_TEMPLATE, NOTES_TEMPLATE, ensureFile } from "./templates.ts";
@@ -37,6 +38,15 @@ interface MessageLike {
 
 function clip(text: string, cap: number): string {
   return text.length <= cap ? text : text.slice(0, cap) + "…";
+}
+
+/** Read a file, returning the fallback when it's missing/unreadable. */
+function readFileOr(filePath: string, fallback: string): string {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch {
+    return fallback;
+  }
 }
 
 /**
@@ -344,12 +354,16 @@ export class CheckpointManager {
     this.running = true;
     const { db, root } = this.deps;
     try {
+      // Captured once so the validator scores §4 against the EXACT source blocks
+      // the writer received (the "never invent a task/actor ID" check is only
+      // meaningful against the same ground truth).
+      const subagentProgress = this.deps.buildSubagentProgress?.(job.sid) ?? "";
       const prompt = checkpointWriterPrompt({
         checkpointPath: checkpointPath(job.sid, root),
         memoryPath: projectMemoryPath(job.pid, root),
         notesPath: notesPath(job.sid, root),
         delta: job.delta,
-        subagentProgress: this.deps.buildSubagentProgress?.(job.sid) ?? "",
+        subagentProgress,
         taskTree: job.taskTree,
       });
       const result = await this.deps.runWriter({ prompt, cwd: job.cwd });
@@ -359,6 +373,8 @@ export class CheckpointManager {
         this.consecutiveFailures = 0;
         this.deps.log(`checkpoint: writer ok (sid=${job.sid}, messages=${job.messageCount})`);
         this.deps.notify?.("💾 mimo-cme: checkpoint saved — session memory written");
+        // CHECKPOINT-VALIDATOR-PLAN Phase 1: observe quality, never act on it.
+        this.validateAndLog(job, subagentProgress);
       } else {
         this.consecutiveFailures += 1;
         this.deps.log(
@@ -420,6 +436,45 @@ export class CheckpointManager {
         `cost=$${(usage?.costUsd ?? 0).toFixed(4)} delta_tok≈${deltaTokensEst} ` +
         `parent_tokens=${job.parentTokens ?? "?"} dur_ms=${usage?.durationMs ?? 0}`,
     );
+  }
+
+  /**
+   * CHECKPOINT-VALIDATOR-PLAN Phase 1 (log-only): score the just-written
+   * checkpoint against the spec and record the result. Observe-only — it never
+   * re-prompts the writer or touches the files (Phase 2). Best-effort like
+   * recordMetrics: a failure here must never disrupt the checkpoint flow, so it
+   * is swallowed to the log. The §4 source blocks (taskTree + subagentProgress)
+   * are passed in so the "never invent an ID" check sees the same ground truth
+   * the writer did.
+   */
+  private validateAndLog(job: WriterJob, subagentProgress: string): void {
+    const { db, root } = this.deps;
+    try {
+      const violations = validateCheckpoint({
+        checkpointText: readFileOr(checkpointPath(job.sid, root), ""),
+        memoryText: readFileOr(projectMemoryPath(job.pid, root), ""),
+        taskGraphBlock: job.taskTree,
+        subagentBlock: subagentProgress,
+      });
+      const c = summarizeViolations(violations);
+      recordValidation(db, {
+        sessionId: job.sid,
+        projectId: job.pid,
+        ts: Date.now(),
+        nError: c.nError,
+        nExtract: c.nExtract,
+        nWarn: c.nWarn,
+        codes: c.codes.join(","),
+        maxSectionOverrunPct: c.maxOverrunPct,
+        endedValid: c.nError + c.nExtract === 0,
+      });
+      this.deps.log(
+        `checkpoint validation: sid=${job.sid} error=${c.nError} extract=${c.nExtract} warn=${c.nWarn}` +
+          (c.codes.length ? ` codes=${c.codes.join(",")}` : " (clean)"),
+      );
+    } catch (err) {
+      this.deps.log(`checkpoint: failed to validate checkpoint: ${String(err)}`);
+    }
   }
 
   /** Memory-flush nudge text for 70% / 85% levels — once per level per session. */
