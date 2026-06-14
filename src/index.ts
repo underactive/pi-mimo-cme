@@ -267,12 +267,10 @@ export default function piMimoCme(pi: ExtensionAPI) {
   function refreshStatus(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
     const { memIdx, projHist } = counts.snapshot();
-    // Append a `· N actors` segment only while subagents are in flight this
-    // session (in-memory count, zero SQL on the hot path) — omitted otherwise so
-    // the footer stays clean when the tasks layer is unused.
-    const actors = ledger.activeCount(sidOf(ctx));
-    const actorSeg = actors > 0 ? ` · ${actors} actor${actors === 1 ? "" : "s"}` : "";
-    ctx.ui.setStatus("mimo-cme", `🧠 ${memIdx} idx · ${projHist} hist${actorSeg}`);
+    // In-flight subagents are intentionally NOT shown here: the pi-subagents
+    // extension already renders that count, so a `· N actors` segment would be
+    // redundant. The ledger still tracks them for checkpoint §4 / the rebuild dump.
+    ctx.ui.setStatus("mimo-cme", `🧠 ${memIdx} idx · ${projHist} hist`);
   }
 
   /**

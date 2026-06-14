@@ -132,10 +132,10 @@ export class ActorLedger {
   private upsertCompacted: StatementSync;
   private existsStmt!: StatementSync;
   /**
-   * In-memory set of non-terminal actor IDs per session — the footer's
-   * active-count source (O(1), zero SQL on the hot path). Intentionally process-
-   * local: an actor from a prior process is dead, so a fresh process correctly
-   * starts at zero. The DB-backed renderers handle the persisted view.
+   * In-memory set of non-terminal actor IDs per session — backs `activeCount`
+   * (O(1), zero SQL on the hot path). Intentionally process-local: an actor from
+   * a prior process is dead, so a fresh process correctly starts at zero. The
+   * DB-backed renderers handle the persisted view.
    */
   private activeIds = new Map<string, Set<string>>();
 
@@ -236,8 +236,9 @@ export class ActorLedger {
       terminal ? ts : null,
     );
 
-    // Live active set for the footer: a background agent enters on `created` and
-    // leaves on its terminal event; `started`/`compacted` don't change membership.
+    // Live active set (backs `activeCount`): a background agent enters on
+    // `created` and leaves on its terminal event; `started`/`compacted` don't
+    // change membership.
     const set = this.activeIds.get(sid) ?? new Set<string>();
     if (phase === "created") set.add(id);
     else if (terminal) set.delete(id);
