@@ -33,9 +33,9 @@ The guiding rule, copied straight from MiMoCode:
 flowchart TD
     subgraph hierarchy["Refined & persistent  ⟶  Complete & raw"]
         direction TB
-        G["Layer 1 — Global memory<br/>global/MEMORY.md<br/>your preferences, every project"]
+        G["Layer 3 — Global memory<br/>global/MEMORY.md<br/>your preferences, every project"]
         P["Layer 2 — Project memory<br/>projects/&lt;pid&gt;/MEMORY.md<br/>rules & decisions for THIS project"]
-        S["Layer 3 — Session memory<br/>sessions/&lt;sid&gt;/checkpoint.md + notes.md<br/>this conversation"]
+        S["Layer 1 — Session memory<br/>sessions/&lt;sid&gt;/checkpoint.md + notes.md<br/>this conversation"]
         H["Layer 4 — History<br/>memory.db (full-text searchable)<br/>every message you've ever exchanged"]
     end
     G --- P --- S --- H
@@ -146,7 +146,7 @@ sequenceDiagram
 
     Note over Ext: As context fills (window-scaled: every 20% / 10% / 5%)
     Ext->>Disk: serialize the conversation delta
-    Ext-->>Disk: spawn a headless writer → updates checkpoint.md / MEMORY.md
+    Ext-->>Disk: an in-process writer session updates checkpoint.md / MEMORY.md
     Ext->>pi: 💾 checkpoint saved
 
     Note over You,Disk: You /clear, resume, or pi compacts
@@ -195,6 +195,8 @@ checkpoints are written by an automated process, not freehand. This keeps memory
 |---|---|
 | `/memory` or `/memory status` | Prints a status report: counts per layer, history rows, db size, last dream/distill times, and the exact paths to your session/project/global files |
 | `/memory search <query>` | Runs the *same* search the agent uses and shows you the top hits — great for "what does pi remember about X?" |
+| `/memory metrics` | Shows what the automatic checkpoint writer costs (its tokens vs. the conversation size) per run |
+| `/memory validations` | Shows how each checkpoint scored against the 11-section spec — a quick health check on what the writer is capturing |
 | `/dream` (or `/memory dream`) | Runs a consolidation pass **now, in this session**, so you can watch it tidy memory |
 | `/distill` (or `/memory distill`) | Runs the workflow-packaging pass now, in this session |
 
@@ -284,6 +286,7 @@ If you have the `sqlite3` CLI:
 # What tables exist?
 sqlite3 ~/.pi/agent/pi-mimo-cme/memory.db ".tables"
 #  -> history_fts  history_fts_idx  memory_fts  memory_fts_idx  meta
+#     actor  writer_metrics  checkpoint_validations  (+ FTS5 shadow tables)
 
 # How many history rows, broken down by kind?
 sqlite3 ~/.pi/agent/pi-mimo-cme/memory.db \
@@ -334,10 +337,11 @@ Create `~/.pi/agent/pi-mimo-cme/config.json`. Anything you omit keeps its defaul
     "thresholds": "auto",             // window-scaled checkpoints (every 20%/10%/5%); or pin a flat array like [20,40,60,80]
     "scoreFloor": 0.15,               // how aggressively weak search hits are dropped (0 = keep all)
     "reconcileOnSearch": true,        // re-scan the file tree before each search (picks up hand edits)
+    "reconcileDebounceMs": 4000,      // skip the re-scan if one ran this recently in-session (0 disables)
     "maxWriterFailures": 3,           // give up after this many failed checkpoint writes
     "pushCaps": {                     // per-section token budgets for what gets injected
       "checkpoint": 11000, "memory": 10000, "global": 6000,
-      "notes": 6000, "memoryKeys": 500
+      "notes": 6000, "memoryKeys": 500, "actors": 2000, "tasks": 2000
     }
   },
   "history": {
@@ -345,6 +349,7 @@ Create `~/.pi/agent/pi-mimo-cme/config.json`. Anything you omit keeps its defaul
     "kinds": ["user_text", "assistant_text", "tool_input", "tool_error"]
   },
   "memory": { "ccIndex": false },     // also index ~/.claude/projects/*/memory (Claude Code memory)
+  "tasks":  { "enabled": true },      // track subagents + the rpiv-todo task graph in §4 (off = skip both)
   "dream":   { "auto": true, "intervalDays": 7 },   // consolidation: on, weekly
   "distill": { "auto": true, "intervalDays": 30 }   // workflow packaging: on, monthly
 }
@@ -371,9 +376,10 @@ no footer. Confirm the install path and that you're running interactive pi. Chec
 `~/.pi/agent/pi-mimo-cme/logs/extension.log` for load errors.
 
 **Does this slow pi down?**
-The per-turn prompt injection is stable text, so pi's prompt cache stays warm. Heavy work
-(the checkpoint writer, dream, distill) runs in **separate background `pi` processes**, not
-in your session.
+The per-turn prompt injection is stable text, so pi's prompt cache stays warm. The checkpoint
+writer runs as an **in-process background session** that doesn't hold up your turn, and the
+heavier `dream`/`distill` passes run in **separate background `pi` processes** — neither blocks
+your conversation.
 
 **Will it leak one project's secrets into another?**
 No. Project memory is keyed by a hash of the project path. Only *global* memory (your
@@ -400,5 +406,7 @@ restart pi to retry.
 ## 8. Where to go next
 
 - Curious how it's built, or want to extend it? → [ONBOARDING-DEVS.md](./ONBOARDING-DEVS.md)
+- *"Is this the real MiMoCode memory system or a watered-down clone?"* →
+  [MIMOCODE-PARITY-MARKETING.md](./MIMOCODE-PARITY-MARKETING.md) (the plain-English comparison).
 - The design rationale and every deliberate divergence from MiMoCode → the project
   [README.md](../README.md) and `docs/design/SPEC.md`.

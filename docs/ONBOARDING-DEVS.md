@@ -73,7 +73,7 @@ src/
   index.ts        # FACTORY. env guard, open DB, wire every pi.on handler, register tools/commands, close on shutdown
   config.ts       # DEFAULT_CONFIG + config.json overlay & validation        [pure]
   paths.ts        # memory root, pid/sid → file paths, type-from-key regex, actor tasks/ paths   [pure]  ← source of truth for layout
-  db.ts           # openDb/migrate (PRAGMA user_version), schema SQL (memory_fts, history_fts, meta, actor), meta get/set
+  db.ts           # openDb/migrate (PRAGMA user_version), schema SQL (memory_fts, history_fts, meta, actor, writer_metrics, checkpoint_validations), meta get/set
   actors.ts       # actor (subagent) ledger: pi-subagents event → actor row + progress.md; §4/rebuild renderers   [pure]
   tasks.ts        # user task graph: rpiv-todo branch snapshot → readTaskSnapshot + buildTaskTree (§4 + rebuild)   [pure, no DB]
   fts.ts          # buildFtsQuery (OR + AND), memorySearch (score floor), historySearch/around   [pure-ish]
@@ -82,10 +82,12 @@ src/
   templates.ts    # checkpoint (11 §) / MEMORY (4 §) / notes templates + section budgets   [pure]
   inject.ts       # system-prompt appendix assembly + rebuild-dump assembly
   history.ts      # message_end extraction, per-session seq counter, JSONL backfill
-  checkpoint.ts   # usage thresholds, delta serialization, in-process writer via runWriter (queue depth 1), nudges
+  footer-counts.ts # cached footer counters (idx/hist) — zero per-turn COUNT(*)   [pure-ish]
+  checkpoint.ts   # usage thresholds, delta serialization, in-process writer via runWriter (queue depth 1), nudges; runs validator + logs writer_metrics/checkpoint_validations
+  checkpoint-validator.ts # log-only checkpoint output validator (Phase 1) — scores §-sections vs spec, no enforce/retry   [pure]
   guard.ts        # path guard for write/edit under the memory root           [pure]
   tools.ts        # `memory` + `history` tool definitions
-  commands.ts     # /memory /dream /distill, reconcileAndNotify, status text
+  commands.ts     # /memory (status/search/metrics/validations/dream/distill), /dream, /distill, reconcileAndNotify, status text
   prompts/
     checkpoint-writer.ts   # adapted MiMoCode checkpoint-writer prompt (template fn)
     dream.ts               # adapted dream.txt
@@ -364,7 +366,7 @@ External-content FTS5 (`content='…'`, `content_rowid='id'`,
 
 ```
 memory_fts(id, path UNIQUE, scope, scope_id, type, body, fingerprint, last_indexed_at)
-            scope ∈ global | projects | sessions | cc ;  fingerprint = "<size>-<mtimeMs>"
+            scope ∈ global | projects | sessions | cc ;  fingerprint = "<size>-<mtimeNs>"
 history_fts(id, session_id, project_id, seq, kind, tool_name, body, time_created)
             UNIQUE(session_id, seq)
 meta(key TEXT PRIMARY KEY, value TEXT)   -- last_checkpoint_seq:<sid>, crossed:<sid>,
@@ -375,6 +377,14 @@ actor(session_id, id, project_id, type, description, status, tokens, tool_uses, 
             PRIMARY KEY(session_id, id) ;  status ∈ created|running|completed|error|stopped
             -- DERIVED from pi-subagents events; the durable artifact is the per-actor
             -- progress.md journal on disk (indexed into memory_fts as type='progress')
+writer_metrics(id, session_id, project_id, ts, ok, writer_input, writer_output,   -- SCHEMA_V3 ("measure first")
+      cache_read, cache_write, writer_total, cost_usd, delta_chars, delta_tokens_est,
+      parent_tokens, parent_context_window, message_count, duration_ms)
+            -- one row per checkpoint-writer run; feeds /memory metrics (fork-vs-skip verdict)
+checkpoint_validations(id, session_id, project_id, ts, n_error, n_extract, n_warn,   -- SCHEMA_V4 (validator Phase 1)
+      codes, max_section_overrun_pct, reflection_attempts, ended_valid, reverted)
+            -- one row per validated checkpoint; feeds /memory validations.
+            -- reflection_attempts/ended_valid/reverted are seams reserved for the deferred Phase 2
 ```
 
 > `actor` is a plain table, **not** an FTS vtab — it's a structured ledger queried by
@@ -498,7 +508,8 @@ truth invariant: a new layer is Markdown first, index second.
 
 ## 11. Deliberate divergences from MiMoCode
 
-Documented in full in the README; the load-bearing ones for a developer:
+Documented in full in the README and, with parity/gap analysis and a roadmap, in
+[MIMOCODE-PARITY-DEVS.md](./MIMOCODE-PARITY-DEVS.md). The load-bearing ones for a developer:
 
 1. **Project/global memory ride in the system prompt every turn** (MiMo injects only at
    rebuild). pi sessions may never compact, so we always carry the small upper layers; the
@@ -551,4 +562,5 @@ Documented in full in the README; the load-bearing ones for a developer:
 | Config | SPEC §8, `config.ts` |
 | Engineering constraints & acceptance checks | SPEC §9–§10 |
 | Verbatim MiMoCode prompts/templates we adapted | `docs/research/mimo-memory-system.md` |
+| Full parity / divergence / gap analysis + parity roadmap | [MIMOCODE-PARITY-DEVS.md](./MIMOCODE-PARITY-DEVS.md) |
 | pi v0.79.x API + gotcha checklist | `docs/research/pi-extension-api.md` |

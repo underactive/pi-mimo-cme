@@ -75,10 +75,10 @@ There is **no build, lint, or bundle step.** Tests cover the pure / pure-ish mod
   never `import` it and never spawn through it — we only *observe* its `subagents:created|started|completed|failed|
   compacted` events on the shared `pi.events` bus (serializable payloads, no object sharing). The `ActorLedger`
   persists an `actor` table and synthesizes `sessions/<sid>/tasks/<id>/progress.md` journals from completion payloads
-  (we can't run a `postStop` hook inside another extension's subagent). checkpoint §4 (Subagents) is reconciled from
+  (we can't run a `postStop` hook inside another extension's subagent). checkpoint §4 **"Task tree"** carries a `### Subagents` sub-block reconciled from
   an inlined SUBAGENT PROGRESS block; the rebuild dump shows in-flight actors under `## Active actors`; the footer
   appends `· N actors` from an **in-memory** count (never per-turn SQL). With pi-subagents absent the ledger stays
-  empty and §4 renders "(no subagents this session)" — nothing breaks. Gate it off with `"tasks": { "enabled": false }`.
+  empty and §4 renders "(no tasks or subagents this session)" — nothing breaks. Gate it off with `"tasks": { "enabled": false }`.
   Bus handlers run OUTSIDE the `safe()` lifecycle path, so they wrap their own try/catch and unsubscribe on
   `session_shutdown` before `db.close()`. `actors.ts` is a **pure module** (no pi import) so it unit-tests under
   `node --test` — keep it that way. **Scope: background subagents only.** pi-subagents emits `created` + the terminal
@@ -88,3 +88,10 @@ There is **no build, lint, or bundle step.** Tests cover the pure / pure-ish mod
   also handles pi-subagents firing `started` BEFORE `created` for non-queued background agents (the orphan `started`
   is dropped). Note `tokens` arrives as a `{input,output,total}` object, not a scalar — `asTokenCount` unwraps it.
   Verify the live event surface with `scripts/smoke-subagents.sh` (isolated agent dir; borrows real auth).
+- **The user task-graph layer is a SOFT dependency on `@juicesharp/rpiv-todo`** (`src/tasks.ts`, the second half of
+  checkpoint §4 "Task tree"). It is a **pure module with no DB**: `readTaskSnapshot` scans the live session branch
+  last-write-wins for the rpiv-todo todo snapshot, and `buildTaskTree` renders the still-actionable slice
+  (`in_progress` + `pending`, deps/activeForm) into the inlined TASK GRAPH block (writer §4) and the rebuild dump's
+  `## Open tasks`. Capped by `pushCaps.tasks` (2000). Also gated by `"tasks": { "enabled": false }`; with rpiv-todo
+  absent the snapshot is empty and the TASK GRAPH half of §4 stays empty — no DB row, no `task_event` log (the
+  cross-session task-history Option B is deferred). Verify with `scripts/smoke-todo-branch.sh`.

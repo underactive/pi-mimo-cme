@@ -77,7 +77,9 @@ never replace — chaining rule):
    ISO-8601Z]` entry format, "your ONLY legal scratchpad"), "What NOT to do", the active
    recall protocol, "Memory entries ... are CLAIMS about a point in time ... Verify
    before acting", "Don't ask the user about something memory may already record."
-   Drop: subagent return format and task-tree material (pi has no task registry).
+   Drop from the per-turn instructions: subagent return format and task-tree guidance —
+   pi has no *native* task registry, and the task tree is populated in checkpoint §4 from
+   the `@juicesharp/rpiv-todo` snapshot (§4.3), not via system-prompt instructions.
 2. **Project memory** — budgeted read of `projects/<pid>/MEMORY.md`, cap 10_000 tokens.
 3. **Global memory** — budgeted read of `global/MEMORY.md`, cap 6_000 tokens.
 4. **Memory keys index** — paths from memory_fts where scope=global OR (sessions,this
@@ -253,15 +255,17 @@ MiMoCode); also a manual `/distill`.
 
 Encoded in prompts, not code (faithful to MiMo): notes → checkpoint §7/§10 → project
 MEMORY.md → global MEMORY.md / skills. No algorithmic decay — LLM-judged forgetting
-under hard size budgets (validators are out of scope for v1; the writer prompt's budget
-text + dream's prune phase carry the pressure).
+under hard size budgets (a Phase 1 **log-only** validator (`checkpoint-validator.ts`) now
+records how each checkpoint scores against the spec — enforcement/retry/revert is deferred to
+Phase 2; the writer prompt's budget text + dream's prune phase carry the pressure).
 
 ## 6. Commands & UI
 
 - `/memory` — no args: status (counts per layer/scope from DB, db size, last dream/
   distill, current sid/pid paths) via `ctx.ui.notify` or a dumped text message;
-  `search <q>`: run the same search, notify top hits. Argument completions for
-  `search|status|dream|distill`.
+  `search <q>`: run the same search, notify top hits; `metrics`: checkpoint-writer cost
+  readout; `validations`: checkpoint output-validation histogram (Phase 1 log-only).
+  Argument completions for `status|search|metrics|validations|dream|distill`.
 - `/dream`, `/distill` — manual evolution passes (§5).
 - `ctx.ui.setStatus("mimo-cme", ...)` on session_start: e.g. `🧠 <n> memories` (guard
   `ctx.hasUI`).
@@ -283,11 +287,13 @@ src/templates.ts    # checkpoint/MEMORY/notes templates + section budgets (verba
 src/inject.ts       # system-prompt assembly + rebuild dump assembly
 src/history.ts      # message_end indexing, seq counters, JSONL backfill
 src/footer-counts.ts # cached footer counters (idx/hist) — zero per-turn COUNT(*) [pure-ish]
-src/checkpoint.ts   # usage thresholds, delta serialization, in-process writer (runWriter dep), nudges
-src/actors.ts       # subagent (actor) ledger + progress.md journals from pi-subagents events [pure]
+src/checkpoint.ts   # usage thresholds, delta serialization, in-process writer (runWriter dep), nudges; runs the validator + writes writer_metrics/checkpoint_validations rows
+src/checkpoint-validator.ts # log-only checkpoint output validator (Phase 1) — scores §-sections vs spec, no enforce/retry
+src/actors.ts       # subagent (actor) ledger + progress.md journals from pi-subagents events [DB-backed]
+src/tasks.ts        # @juicesharp/rpiv-todo task-graph reader → §4 "Task tree" (pure, no DB)
 src/guard.ts        # tool_call path guard
 src/tools.ts        # memory + history tool definitions
-src/commands.ts     # /memory (status/search/metrics/dream/distill), /dream, /distill
+src/commands.ts     # /memory (status/search/metrics/validations/dream/distill), /dream, /distill
 src/prompts/checkpoint-writer.ts  # adapted prompt as exported template fn
 src/prompts/dream.ts
 src/prompts/distill.ts
@@ -303,10 +309,10 @@ README.md           # what/why, CME mapping, four layers, install, config, diver
                   "reconcileOnSearch": true, "reconcileDebounceMs": 4000,
                   "maxWriterFailures": 3,
                   "pushCaps": { "checkpoint": 11000, "memory": 10000, "global": 6000,
-                                 "notes": 6000, "memoryKeys": 500, "actors": 2000 } },
+                                 "notes": 6000, "memoryKeys": 500, "actors": 2000, "tasks": 2000 } },
   "history": { "kinds": ["user_text", "assistant_text", "tool_input", "tool_error"] },
   "memory":  { "ccIndex": false },     // index ~/.claude/projects/*/memory as scope "cc"
-  "tasks":   { "enabled": true },      // observe pi-subagents events → actor ledger (Phase 2)
+  "tasks":   { "enabled": true },      // pi-subagents events → actor ledger + rpiv-todo snapshot → §4 Task tree
   "dream":   { "auto": true,  "intervalDays": 7 },
   "distill": { "auto": true, "intervalDays": 30 }
 }

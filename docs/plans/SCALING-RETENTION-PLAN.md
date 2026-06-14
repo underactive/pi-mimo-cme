@@ -236,7 +236,7 @@ GC action — **delete the folder, let reconcile clean the index**:
 - `fs.rmSync(sessionDir(sid, root), { recursive: true, force: true })`.
 - The very next `reconcile` (dream already runs one right after) prunes the now
   -vanished `checkpoint.md`/`notes.md` rows from `memory_fts` via its **existing**
-  vanished-file path (`src/reconcile.ts:160-171`), which uses correct trigger
+  vanished-file path (`src/reconcile.ts:186-195`), which uses correct trigger
   semantics. So GC needs **no** bespoke index code — order it *before* the
   reconcile in `reportPassResult`, or call reconcile again after.
 
@@ -286,7 +286,7 @@ drops their index rows, recent sessions remain resumable, default is a no-op.
 ## Phase 4 — Scope/cache reconcile's tree walk
 
 ### Problem
-`reconcile` → `walkMemoryTree` (`src/reconcile.ts:75-115`) walks
+`reconcile` → `walkMemoryTree` (`src/reconcile.ts:93`) walks
 `root/sessions/*` across **all projects** (`readdir` + `statSync` per `.md`) on
 the first `/memory search` per session and after each dream. Cost is
 O(total machine-wide sessions). `reconcileDebounceMs` (`config.ts:27`) collapses

@@ -69,6 +69,9 @@ Development: `npm install`, then `npm run typecheck` and `npm test` (Node ≥ 24
 - `/memory search <query>` — run the same BM25 search the model uses; prints top hits.
 - `/memory metrics` — the checkpoint-writer cost readout (writer tokens vs. parent
   context per run) with a fork-vs-delta build-or-skip verdict (see divergence #5).
+- `/memory validations` — the checkpoint-writer output-validation readout: a histogram
+  of how each checkpoint scored against the 11-section spec. Phase 1 is log-only; this
+  data gates the deferred enforce/retry/revert (Phase 2).
 - `/memory dream`, `/memory distill` — aliases for the commands below.
 - `/dream` — manual consolidation pass **in the current session** (you watch it work).
 - `/distill` — manual workflow-packaging pass in the current session.
@@ -102,7 +105,7 @@ constrained by a path guard that allows only `sessions/<sid>/notes.md` and
     "maxWriterFailures": 3,           // consecutive writer failures before giving up
     "pushCaps": {                     // per-section token budgets for injection
       "checkpoint": 11000, "memory": 10000, "global": 6000,
-      "notes": 6000, "memoryKeys": 500, "actors": 2000
+      "notes": 6000, "memoryKeys": 500, "actors": 2000, "tasks": 2000
     }
   },
   "history": {
@@ -110,7 +113,7 @@ constrained by a path guard that allows only `sessions/<sid>/notes.md` and
     "kinds": ["user_text", "assistant_text", "tool_input", "tool_error"]
   },
   "memory": { "ccIndex": false },     // index ~/.claude/projects/*/memory as scope "cc"
-  "tasks":  { "enabled": true },      // observe @tintinweb/pi-subagents events → actor ledger (off = skip the wiring)
+  "tasks":  { "enabled": true },      // @tintinweb/pi-subagents events → actor ledger + @juicesharp/rpiv-todo snapshot → §4 task tree (off = skip both)
   "dream":   { "auto": true,  "intervalDays": 7 },
   "distill": { "auto": true, "intervalDays": 30 }
 }
