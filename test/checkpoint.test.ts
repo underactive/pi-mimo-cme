@@ -129,7 +129,7 @@ test("CheckpointManager with thresholds:'auto' fires at 5% steps on a 1M window"
 
 test("CheckpointManager: fires once per threshold, inlines delta in prompt, advances seq on success", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cp-"));
-  const root = path.join(agent, "pi-mimo-cme");
+  const root = path.join(agent, "cme");
   const db = openDb(":memory:");
   const writerCalls: WriterRequest[] = [];
   let releaseWriter: (() => void) | undefined;
@@ -186,7 +186,7 @@ test("CheckpointManager: fires once per threshold, inlines delta in prompt, adva
 
 test("CheckpointManager: inlines the SUBAGENT PROGRESS block from the injected builder", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpsa-"));
-  const root = path.join(agent, "pi-mimo-cme");
+  const root = path.join(agent, "cme");
   const db = openDb(":memory:");
   const calls: WriterRequest[] = [];
   const manager = new CheckpointManager({
@@ -212,7 +212,7 @@ test("CheckpointManager: inlines the SUBAGENT PROGRESS block from the injected b
 
 test("CheckpointManager: omits subagent progress when no builder is wired (renders placeholder)", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpsa0-"));
-  const root = path.join(agent, "pi-mimo-cme");
+  const root = path.join(agent, "cme");
   const db = openDb(":memory:");
   const calls: WriterRequest[] = [];
   const manager = new CheckpointManager({
@@ -235,7 +235,7 @@ test("CheckpointManager: omits subagent progress when no builder is wired (rende
 
 test("CheckpointManager: inlines the TASK GRAPH block from the full branch", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cptg-"));
-  const root = path.join(agent, "pi-mimo-cme");
+  const root = path.join(agent, "cme");
   const db = openDb(":memory:");
   const calls: WriterRequest[] = [];
   let sawMessages = 0;
@@ -273,7 +273,7 @@ test("CheckpointManager: inlines the TASK GRAPH block from the full branch", asy
 
 test("CheckpointManager: renders the no-tasks placeholder when no task builder is wired", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cptg0-"));
-  const root = path.join(agent, "pi-mimo-cme");
+  const root = path.join(agent, "cme");
   const db = openDb(":memory:");
   const calls: WriterRequest[] = [];
   const manager = new CheckpointManager({
@@ -296,7 +296,7 @@ test("CheckpointManager: renders the no-tasks placeholder when no task builder i
 
 test("CheckpointManager: records writer token usage + parent context per run", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpm-"));
-  const root = path.join(agent, "pi-mimo-cme");
+  const root = path.join(agent, "cme");
   const db = openDb(":memory:");
   const manager = new CheckpointManager({
     db,
@@ -348,7 +348,7 @@ test("CheckpointManager: records writer token usage + parent context per run", a
 
 test("CheckpointManager: records a metrics row even when the writer reports failure", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpmf-"));
-  const root = path.join(agent, "pi-mimo-cme");
+  const root = path.join(agent, "cme");
   const db = openDb(":memory:");
   const manager = new CheckpointManager({
     db,
@@ -379,7 +379,7 @@ test("CheckpointManager: records a metrics row even when the writer reports fail
 
 test("CheckpointManager: gives up after max consecutive writer failures", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpf-"));
-  const root = path.join(agent, "pi-mimo-cme");
+  const root = path.join(agent, "cme");
   const db = openDb(":memory:");
   let calls = 0;
   const manager = new CheckpointManager({
@@ -439,7 +439,7 @@ test("CheckpointManager: nudges fire once per level, 85% covers 70%", () => {
 
 test("CheckpointManager: records one checkpoint_validations row per successful run (Phase 1)", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpv-"));
-  const root = path.join(agent, "pi-mimo-cme");
+  const root = path.join(agent, "cme");
   const db = openDb(":memory:");
   // The writer "produces" an in-spec checkpoint: the template with §1 filled in.
   const validCp = CHECKPOINT_TEMPLATE.replace(
@@ -473,7 +473,7 @@ test("CheckpointManager: records one checkpoint_validations row per successful r
 
 test("CheckpointManager: validation row flags an out-of-spec write but never blocks the checkpoint", async () => {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-cpv0-"));
-  const root = path.join(agent, "pi-mimo-cme");
+  const root = path.join(agent, "cme");
   const db = openDb(":memory:");
   // The writer leaves the bare template (§1 still "(none yet)" → out of spec).
   const manager = new CheckpointManager({

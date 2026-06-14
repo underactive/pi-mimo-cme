@@ -24,11 +24,12 @@ function expandTilde(p: string): string {
 }
 
 export function memoryRoot(): string {
-  // Unique root under pi's agent dir (NOT the generic "memory" — that name is the
-  // most collision-prone and the likeliest segment a future pi-native memory
-  // feature would claim). The package name is globally unique, so subfolders
-  // (projects/, sessions/, global/) underneath need no further prefixing.
-  return path.join(agentDir(), "pi-mimo-cme");
+  // Lives at <pi-home>/cme — a top-level sibling of the agent dir (default
+  // ~/.pi/cme), NOT buried under it. Derived from dirname(agentDir()) so the
+  // tree still relocates with PI_CODING_AGENT_DIR. "cme" is short and distinct
+  // enough that a future pi-native memory feature is unlikely to claim it;
+  // subfolders (projects/, sessions/, global/) underneath need no prefixing.
+  return path.join(path.dirname(agentDir()), "cme");
 }
 
 export function dbPath(root: string = memoryRoot()): string {

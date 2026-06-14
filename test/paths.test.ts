@@ -26,15 +26,18 @@ test("projectId is a stable 12-char hex hash of the absolute cwd", () => {
 
 test("agentDir / memoryRoot respect PI_CODING_AGENT_DIR", () => {
   const prev = process.env["PI_CODING_AGENT_DIR"];
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-agent-"));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "mimo-cme-agent-"));
+  const agent = path.join(base, "agent");
   try {
-    process.env["PI_CODING_AGENT_DIR"] = dir;
-    assert.equal(agentDir(), dir);
-    assert.equal(memoryRoot(), path.join(dir, "pi-mimo-cme"));
+    process.env["PI_CODING_AGENT_DIR"] = agent;
+    assert.equal(agentDir(), agent);
+    // memoryRoot is a sibling of the agent dir (<pi-home>/cme), so it relocates
+    // with the override instead of nesting under the agent dir.
+    assert.equal(memoryRoot(), path.join(base, "cme"));
   } finally {
     if (prev === undefined) delete process.env["PI_CODING_AGENT_DIR"];
     else process.env["PI_CODING_AGENT_DIR"] = prev;
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(base, { recursive: true, force: true });
   }
 });
 

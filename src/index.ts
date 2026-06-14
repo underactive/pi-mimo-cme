@@ -89,7 +89,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
     const now = Date.now();
     if (now - lastErrorNotifyAt < ERROR_NOTIFY_THROTTLE_MS) return; // warned recently; the log has the rest
     lastErrorNotifyAt = now;
-    c.ui.notify("mimo-cme: a memory operation failed (see pi-mimo-cme/logs/extension.log)", "warning");
+    c.ui.notify("mimo-cme: a memory operation failed (see ~/.pi/cme/logs/extension.log)", "warning");
   };
 
   /** SPEC §9.5: handler failures are logged, surfaced once, and swallowed. */

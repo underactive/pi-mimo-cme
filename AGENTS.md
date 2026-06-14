@@ -47,7 +47,7 @@ There is **no build, lint, or bundle step.** Tests cover the pure / pure-ish mod
 - **Erasable TypeScript only.** Node 24 type-strips `src/` and `test/` at runtime, so **no enums, namespaces, or
   parameter-properties** (`tsconfig` sets `erasableSyntaxOnly`). Use `import type` for type-only imports.
 - **`safe(name, fn)` wraps every handler** (SPEC §9.5): a memory failure must never break the host session. It logs to
-  `pi-mimo-cme/logs/extension.log`, shows at most one throttled toast (60s window), and swallows the error. Keep new
+  `~/.pi/cme/logs/extension.log`, shows at most one throttled toast (60s window), and swallows the error. Keep new
   handlers inside this wrapper.
 - **Recursion guards differ by worker.** The checkpoint **writer** runs in-process (`runWriter` in `index.ts`): its
   session is built with `DefaultResourceLoader({ noExtensions: true })`, so pi-mimo-cme never binds to it — that is

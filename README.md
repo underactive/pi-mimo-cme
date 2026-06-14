@@ -21,9 +21,10 @@ and smaller; the lower layers are more complete, larger, and slower."*
 
 ## The four layers
 
-Root: `~/.pi/agent/pi-mimo-cme/` (respects `PI_CODING_AGENT_DIR`). The root is the
-package name rather than a generic `memory/` so it can't collide with other extensions —
-or with a future pi-native memory feature — sharing `~/.pi/agent/`.
+Root: `~/.pi/cme/` (respects `PI_CODING_AGENT_DIR` — it sits *beside* the agent dir, not
+inside it). `cme` is a short, distinct top-level segment rather than a generic `memory/`,
+so it can't collide with other extensions — or with a future pi-native memory feature —
+under `~/.pi/`.
 
 | Layer | Artifact | Scope / lifetime | Writer |
 |---|---|---|---|
@@ -93,7 +94,7 @@ constrained by a path guard that allows only `sessions/<sid>/notes.md` and
 `projects/<pid>/MEMORY.md`; everything else under the memory root is blocked
 (checkpoint.md is the writer's domain; no `learning.md`, no `scratch.md`).
 
-## Config — `~/.pi/agent/pi-mimo-cme/config.json` (all optional)
+## Config — `~/.pi/cme/config.json` (all optional)
 
 ```jsonc
 {
@@ -120,7 +121,7 @@ constrained by a path guard that allows only `sessions/<sid>/notes.md` and
 ```
 
 Auto passes start their interval clock on first sight of a project (no surprise dream
-on a fresh install); background runs are logged to `~/.pi/agent/pi-mimo-cme/logs/`.
+on a fresh install); background runs are logged to `~/.pi/cme/logs/`.
 
 ## How a session flows
 

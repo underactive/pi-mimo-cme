@@ -25,8 +25,8 @@ have broken the invariant.** The four layers:
 | 3. Global | `global/MEMORY.md` | dream promotes entries; read-only for the agent |
 | 4. History | every message in `memory.db` (`history_fts` + FTS5) | automatic: `message_end` events + JSONL backfill |
 
-Memory root is `~/.pi/agent/pi-mimo-cme/` (respects `PI_CODING_AGENT_DIR`) — the **package name**, not a generic
-`memory/`, so it can't collide with a future pi-native memory feature. `pid` = first 12 hex of `sha256(absolute cwd)`.
+Memory root is `~/.pi/cme/` (respects `PI_CODING_AGENT_DIR`, as a **sibling** of the agent dir) — a short, distinct
+top-level segment, not a generic `memory/`, so it can't collide with a future pi-native memory feature. `pid` = first 12 hex of `sha256(absolute cwd)`.
 
 ### Module map
 

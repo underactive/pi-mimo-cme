@@ -23,12 +23,13 @@ and smaller; the lower layers are more complete, larger, and slower."
 
 ## 1. Storage layout
 
-Root: `path.join(getAgentDir(), "pi-mimo-cme")` → `~/.pi/agent/pi-mimo-cme/` (respects
-`PI_CODING_AGENT_DIR`). The root is the package name, not a generic `memory/`, so it
-can't collide with a future pi-native `memory/` feature (see `src/paths.ts` `memoryRoot()`).
+Root: `path.join(path.dirname(getAgentDir()), "cme")` → `~/.pi/cme/` (respects
+`PI_CODING_AGENT_DIR` — a *sibling* of the agent dir, so it relocates with the override).
+`cme` is a short, distinct top-level segment, not a generic `memory/`, so it can't
+collide with a future pi-native `memory/` feature (see `src/paths.ts` `memoryRoot()`).
 
 ```
-~/.pi/agent/pi-mimo-cme/
+~/.pi/cme/
 ├── memory.db                      # SQLite: FTS index over files + history layer + meta
 ├── config.json                    # optional user overrides (see §8)
 ├── logs/                          # headless writer/dream/distill run logs
@@ -301,7 +302,7 @@ test/*.test.ts      # node:test, runs with plain `node --test` (erasable TS)
 README.md           # what/why, CME mapping, four layers, install, config, divergences from MiMoCode
 ```
 
-## 8. Config (`~/.pi/agent/pi-mimo-cme/config.json`, all optional)
+## 8. Config (`~/.pi/cme/config.json`, all optional)
 
 ```jsonc
 {

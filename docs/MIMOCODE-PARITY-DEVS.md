@@ -281,8 +281,8 @@ inside the same millisecond — finer than `mtimeMs`. Evidence: `reconcile.ts`.
 ### 4.6 Hot-path footer counts + package-name root
 
 A live `🧠 N idx · M hist [· K actors]` footer is served from an in-memory cache seeded once per
-session (zero SQL on the per-turn path, reseeded after batch mutations). And the memory root is the
-**package name** `~/.pi/agent/pi-mimo-cme/`, not a generic `memory/`, so it can't collide with a
+session (zero SQL on the per-turn path, reseeded after batch mutations). And the memory root is a
+**short, distinct top-level segment** `~/.pi/cme/` (a sibling of the agent dir), not a generic `memory/`, so it can't collide with a
 future pi-native memory feature. Evidence: `footer-counts.ts`, `paths.ts`.
 
 ---

@@ -12,8 +12,8 @@ Authoritative companions in-repo, read before large changes:
 - `docs/research/pi-extension-api.md` — the pi v0.79.x extension API and its gotcha checklist.
 
 > **Paths source of truth:** `src/paths.ts` `memoryRoot()` defines the memory root as
-> `~/.pi/agent/pi-mimo-cme/` (the package name, not a generic `memory/`, so it can't
-> collide with a future pi-native `memory/` feature). When a doc and the code disagree on
+> `~/.pi/cme/` (a short, distinct top-level segment beside the agent dir, not a generic
+> `memory/`, so it can't collide with a future pi-native `memory/` feature). When a doc and the code disagree on
 > a path, **`src/paths.ts` wins.**
 
 ---
@@ -438,7 +438,7 @@ PI_CODING_AGENT_DIR=$(mktemp -d) pi -e ./src/index.ts \
   -p "Call the memory tool with query 'anything' and report its output"
 
 # 3) Inspect the temp DB the smoke run created
-sqlite3 "$PI_CODING_AGENT_DIR/pi-mimo-cme/memory.db" ".tables"
+sqlite3 ~/.pi/cme/memory.db ".tables"
 ```
 
 **Phase 2 subagent layer — full live verification:**

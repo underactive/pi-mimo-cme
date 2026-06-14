@@ -241,7 +241,7 @@ GC action — **delete the folder, let reconcile clean the index**:
   reconcile in `reportPassResult`, or call reconcile again after.
 
 ### Layer boundary (document prominently)
-Phase 3 GCs **our markdown session layer** (`pi-mimo-cme/sessions/<sid>/`) and
+Phase 3 GCs **our markdown session layer** (`~/.pi/cme/sessions/<sid>/`) and
 its `memory_fts` rows. It does **not** touch `history_fts` — those rows are the
 layer-4 firehose backfilled from **pi's own** session JSONL
 (`~/.pi/agent/sessions/…`, see `sessionsJsonlDir`), which we don't own. History

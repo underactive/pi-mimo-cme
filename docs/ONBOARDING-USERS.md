@@ -54,7 +54,7 @@ flowchart TD
 Everything lives under one folder:
 
 ```
-~/.pi/agent/pi-mimo-cme/
+~/.pi/cme/
 ├── memory.db                     # the searchable index (Layer 4 + derived index of 1–3)
 ├── config.json                   # optional — your settings (see §6)
 ├── logs/                         # what the background passes did
@@ -225,16 +225,16 @@ mimo-cme memory status
 
 memory files indexed: sessions=2 projects=1
 history rows: 240 total, 240 this project
-db: /Users/you/.pi/agent/pi-mimo-cme/memory.db (148.0 KB)
+db: /Users/you/.pi/cme/memory.db (148.0 KB)
 last dream: never (auto=true, every 7d)
 last distill: never (auto=true, every 30d)
 
 session  s_abc123
-  checkpoint: /Users/you/.pi/agent/pi-mimo-cme/sessions/s_abc123/checkpoint.md
-  notes:      /Users/you/.pi/agent/pi-mimo-cme/sessions/s_abc123/notes.md
+  checkpoint: /Users/you/.pi/cme/sessions/s_abc123/checkpoint.md
+  notes:      /Users/you/.pi/cme/sessions/s_abc123/notes.md
 project  9f2a1c0b4d6e
-  memory:     /Users/you/.pi/agent/pi-mimo-cme/projects/9f2a1c0b4d6e/MEMORY.md
-global   /Users/you/.pi/agent/pi-mimo-cme/global/MEMORY.md
+  memory:     /Users/you/.pi/cme/projects/9f2a1c0b4d6e/MEMORY.md
+global   /Users/you/.pi/cme/global/MEMORY.md
 ```
 
 If `history rows` is **> 0** and grows as you keep chatting, capture is working.
@@ -262,16 +262,16 @@ Everything is plain text. From a normal terminal:
 
 ```sh
 # List your memory tree
-ls -R ~/.pi/agent/pi-mimo-cme/
+ls -R ~/.pi/cme/
 
 # Read your project's durable memory
-cat ~/.pi/agent/pi-mimo-cme/projects/<pid>/MEMORY.md
+cat ~/.pi/cme/projects/<pid>/MEMORY.md
 
 # Read the running scratchpad for the current session
-cat ~/.pi/agent/pi-mimo-cme/sessions/<sid>/notes.md
+cat ~/.pi/cme/sessions/<sid>/notes.md
 
 # After context crosses ~20%, a real checkpoint appears (11 sections)
-cat ~/.pi/agent/pi-mimo-cme/sessions/<sid>/checkpoint.md
+cat ~/.pi/cme/sessions/<sid>/checkpoint.md
 ```
 
 A fresh `checkpoint.md` is a template full of `(none yet)`. After the writer runs (you'll
@@ -284,16 +284,16 @@ If you have the `sqlite3` CLI:
 
 ```sh
 # What tables exist?
-sqlite3 ~/.pi/agent/pi-mimo-cme/memory.db ".tables"
+sqlite3 ~/.pi/cme/memory.db ".tables"
 #  -> history_fts  history_fts_idx  memory_fts  memory_fts_idx  meta
 #     actor  writer_metrics  checkpoint_validations  (+ FTS5 shadow tables)
 
 # How many history rows, broken down by kind?
-sqlite3 ~/.pi/agent/pi-mimo-cme/memory.db \
+sqlite3 ~/.pi/cme/memory.db \
   "SELECT kind, COUNT(*) FROM history_fts GROUP BY kind;"
 
 # Full-text search the raw history yourself
-sqlite3 ~/.pi/agent/pi-mimo-cme/memory.db \
+sqlite3 ~/.pi/cme/memory.db \
   "SELECT session_id, kind, substr(body,1,80)
      FROM history_fts JOIN history_fts_idx ON history_fts.id = history_fts_idx.rowid
     WHERE history_fts_idx MATCH 'adapter' LIMIT 5;"
@@ -318,8 +318,8 @@ That's the session memory being re-hydrated. The agent continues as if it never 
 Background work (back-fill, dream, distill, checkpoint writer) is logged:
 
 ```sh
-ls ~/.pi/agent/pi-mimo-cme/logs/
-cat ~/.pi/agent/pi-mimo-cme/logs/extension.log
+ls ~/.pi/cme/logs/
+cat ~/.pi/cme/logs/extension.log
 ```
 
 `extension.log` records checkpoints, back-fills, and any errors. Per-pass logs
@@ -329,7 +329,7 @@ cat ~/.pi/agent/pi-mimo-cme/logs/extension.log
 
 ## 6. Configuration (all optional)
 
-Create `~/.pi/agent/pi-mimo-cme/config.json`. Anything you omit keeps its default.
+Create `~/.pi/cme/config.json`. Anything you omit keeps its default.
 
 ```jsonc
 {
@@ -373,7 +373,7 @@ A few notes:
 **I don't see the `🧠 mem` footer.**
 The extension didn't load, or you're in a non-interactive mode (`-p`, JSON output) that has
 no footer. Confirm the install path and that you're running interactive pi. Check
-`~/.pi/agent/pi-mimo-cme/logs/extension.log` for load errors.
+`~/.pi/cme/logs/extension.log` for load errors.
 
 **Does this slow pi down?**
 The per-turn prompt injection is stable text, so pi's prompt cache stays warm. The checkpoint
@@ -392,12 +392,12 @@ them automatically. (`checkpoint.md` is written by the automated writer; hand-ed
 be overwritten on the next checkpoint.)
 
 **How do I wipe everything and start over?**
-Delete the per-project folder `~/.pi/agent/pi-mimo-cme/projects/<pid>/` and the relevant
-`sessions/<sid>/`, or remove the whole `~/.pi/agent/pi-mimo-cme/` tree. Deleting only
+Delete the per-project folder `~/.pi/cme/projects/<pid>/` and the relevant
+`sessions/<sid>/`, or remove the whole `~/.pi/cme/` tree. Deleting only
 `memory.db` keeps your Markdown and just rebuilds the index.
 
 **A background pass seems stuck.**
-Look in `~/.pi/agent/pi-mimo-cme/logs/`. Each pass writes a log with its exit code and
+Look in `~/.pi/cme/logs/`. Each pass writes a log with its exit code and
 output. Checkpoint writing gives up after 3 consecutive failures and tells the log to
 restart pi to retry.
 
