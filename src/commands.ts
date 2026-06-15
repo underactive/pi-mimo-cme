@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { CmeConfig } from "./config.ts";
+import { describeClearPlan, describeClearResult, executeClear, planClear } from "./clear.ts";
 import { metaGet, validationSummary, writerMetricsSummary } from "./db.ts";
 import type { FooterCounts } from "./footer-counts.ts";
 import { memorySearch } from "./fts.ts";
@@ -263,6 +264,48 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
     pi.sendMessage({ customType, content, display: true });
   };
 
+  // Destructive, irreversible-ish wipe of THIS project's memory. Distinct from
+  // the read-only readouts: it mutates the shared DB the live session uses, so it
+  // requires idle (like showReadout). Flow: preview (deletes nothing) → confirm
+  // → execute → reseed the cached footer. `--yes`/`-y`/`force` skips the dialog,
+  // and is REQUIRED in headless/RPC modes where ui.confirm has no surface.
+  const runClear = async (ctx: ExtensionCommandContext, rest: string): Promise<void> => {
+    if (!ctx.isIdle()) {
+      ctx.ui.notify("mimo-cme: agent is busy — run /memory clear when idle", "warning");
+      return;
+    }
+    const forced = /(^|\s)(--yes|-y|force)(\s|$)/.test(rest);
+    const sid = ctx.sessionManager.getSessionId();
+    const plan = planClear(deps.db, ctx.cwd, { root: deps.root, currentSessionId: sid });
+    if (plan.empty) {
+      ctx.ui.notify(`mimo-cme: nothing to clear for project ${plan.projectId}`, "info");
+      return;
+    }
+    pi.sendMessage({ customType: "mimo-cme:clear-preview", content: describeClearPlan(plan), display: true });
+
+    let execute = forced;
+    if (!forced) {
+      if (!ctx.hasUI) {
+        ctx.ui.notify("mimo-cme: no interactive UI — re-run `/memory clear --yes` to execute", "warning");
+        return;
+      }
+      execute = await ctx.ui.confirm(
+        "mimo-cme: clear this project's memory?",
+        `Project ${plan.projectId}: curated files move to trash, derived DB rows are deleted. The current session is preserved. Proceed?`,
+      );
+    }
+    if (!execute) {
+      ctx.ui.notify("mimo-cme: clear cancelled", "info");
+      return;
+    }
+
+    const result = executeClear(deps.db, plan, { root: deps.root, currentSessionId: sid });
+    // The wipe changed memory_fts and history_fts — reseed both cached footer
+    // counters so the live footer reflects the post-clear state (invariant #4).
+    deps.counts?.seed(deps.db, plan.projectId);
+    pi.sendMessage({ customType: "mimo-cme:clear-result", content: describeClearResult(result), display: true });
+  };
+
   pi.registerCommand("dream", {
     description: "mimo-cme: consolidate durable memory from recent sessions (manual dream pass)",
     handler: async (_args, ctx) => {
@@ -278,13 +321,17 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   });
 
   pi.registerCommand("memory", {
-    description: "mimo-cme: status | search <query> | metrics | validations | dream | distill",
+    description: "mimo-cme: status | search <query> | metrics | validations | dream | distill | clear",
     getArgumentCompletions: (prefix) =>
-      ["status", "search", "metrics", "validations", "dream", "distill"]
+      ["status", "search", "metrics", "validations", "dream", "distill", "clear"]
         .filter((s) => s.startsWith(prefix))
         .map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
       const trimmed = args.trim();
+      if (trimmed === "clear" || trimmed.startsWith("clear ")) {
+        await runClear(ctx, trimmed.slice("clear".length).trim());
+        return;
+      }
       if (trimmed === "dream") {
         sendManualPass(ctx, buildDreamPrompt(deps, ctx.cwd), "dream");
         return;

@@ -73,6 +73,11 @@ Development: `npm install`, then `npm run typecheck` and `npm test` (Node ≥ 24
 - `/memory validations` — the checkpoint-writer output-validation readout: a histogram
   of how each checkpoint scored against the 11-section spec. Phase 1 is log-only; this
   data gates the deferred enforce/retry/revert (Phase 2).
+- `/memory clear` — wipe **this project's** memory: curated `projects/<pid>/` and its
+  linked `sessions/<sid>/` trees move to `<root>/trash/` (recoverable), and the derived
+  DB rows tagged to the project are deleted. Previews the blast radius and asks to confirm
+  first (`--yes` skips the dialog / is required in headless mode). Global memory, the cc
+  index, pi's own transcripts, and the current live session are left untouched.
 - `/memory dream`, `/memory distill` — aliases for the commands below.
 - `/dream` — manual consolidation pass **in the current session** (you watch it work).
 - `/distill` — manual workflow-packaging pass in the current session.

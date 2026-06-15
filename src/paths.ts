@@ -44,6 +44,16 @@ export function logsDir(root: string = memoryRoot()): string {
   return path.join(root, "logs");
 }
 
+/**
+ * Recycle bin for `/memory clear`. Curated project/session trees move here
+ * (recoverable) instead of being rm -rf'd. A sibling of projects/ & sessions/
+ * under the memory root, so it shares their filesystem (renameSync stays atomic)
+ * and reconcile never walks it (it only walks global/projects/sessions/cc).
+ */
+export function trashDir(root: string = memoryRoot()): string {
+  return path.join(root, "trash");
+}
+
 /** pid = sha256(absolute cwd) hex, truncated to 12 chars (MiMoCode's resolveProjectId). */
 export function projectId(cwd: string): string {
   return crypto.createHash("sha256").update(path.resolve(cwd)).digest("hex").slice(0, 12);
