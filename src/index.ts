@@ -252,7 +252,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
       .map((e) => (e as { message: unknown }).message);
 
   /**
-   * Live footer: `🧠 <idx> idx · <hist> hist`.
+   * Live footer: `󰍛 <idx> idx · <hist> hist`, rendered dark gray.
    *   idx  = rows in memory_fts  — every indexed memory layer (global/project/
    *          session markdown); the agent's recallable knowledge, global.
    *   hist = rows in history_fts for THIS project — the layer-4 capture.
@@ -263,6 +263,12 @@ export default function piMimoCme(pi: ExtensionAPI) {
    * and `reseedMemory` (reconcile). No-op without a UI (-p / json modes).
    * Reusing the "mimo-cme" key overwrites the footer in place, which is what
    * makes it update live rather than stacking entries.
+   *
+   * Color: setStatus() takes only a string, and the footer renderer draws
+   * extension statuses raw (no theme wrapper) while measuring width ANSI-aware,
+   * so we embed the color as an SGR sequence. 38;5;244 is a 256-palette medium
+   * gray (deterministic across terminals, unlike 16-color "bright black"); the
+   * trailing reset stops the dim from bleeding into anything drawn after us.
    */
   function refreshStatus(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
@@ -270,7 +276,9 @@ export default function piMimoCme(pi: ExtensionAPI) {
     // In-flight subagents are intentionally NOT shown here: the pi-subagents
     // extension already renders that count, so a `· N actors` segment would be
     // redundant. The ledger still tracks them for checkpoint §4 / the rebuild dump.
-    ctx.ui.setStatus("mimo-cme", `🧠 ${memIdx} idx · ${projHist} hist`);
+    const gray = "\x1b[38;5;244m";
+    const reset = "\x1b[0m";
+    ctx.ui.setStatus("mimo-cme", `${gray}󰍛 ${memIdx} idx · ${projHist} hist${reset}`);
   }
 
   /**

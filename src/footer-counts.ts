@@ -1,7 +1,7 @@
 /**
  * Phase 1 of SCALING-RETENTION-PLAN: cached footer counters.
  *
- * The live footer (`🧠 <idx> idx · <hist> hist`) used to run two COUNT(*)
+ * The live footer (`󰍛 <idx> idx · <hist> hist`) used to run two COUNT(*)
  * queries on EVERY message_end and turn_end. `COUNT(*) FROM history_fts WHERE
  * project_id = ?` is an index range scan over this project's history rows —
  * cheap at first, but it scales with the table and becomes measurable per-turn
