@@ -9,6 +9,7 @@
 │                                                                       │
 │  /memory [status]      → 🔍 View memory index counts & file paths    │
 │  /memory search <q>    → 🔎 BM25 search (top 10 + escalation)       │
+│  /memory preview      → 👁  Show injected content (appendix + rebuild)│
 │  /memory metrics       → 📊 Checkpoint-writer cost analysis         │
 │  /memory validations   → ✅ Output quality histogram (Phase 1)       │
 │  /memory dream         → 💭 Consolidate memory (queued if busy)     │

@@ -195,6 +195,7 @@ checkpoints are written by an automated process, not freehand. This keeps memory
 |---|---|
 | `/memory` or `/memory status` | Prints a status report: counts per layer, history rows, db size, last dream/distill times, and the exact paths to your session/project/global files |
 | `/memory search <query>` | Runs the *same* search the agent uses and shows you the top hits — great for "what does pi remember about X?" |
+| `/memory preview` | Shows the actual text CME injects into your system prompt each turn — the memory instructions, project/global MEMORY.md, keys index, and the rebuild dump (if any) |
 | `/memory metrics` | Shows what the automatic checkpoint writer costs (its tokens vs. the conversation size) per run |
 | `/memory validations` | Shows how each checkpoint scored against the 11-section spec — a quick health check on what the writer is capturing |
 | `/memory clear` | **Forgets this project.** Moves the project's curated + session memory to a `trash/` folder (recoverable) and deletes the project's derived DB rows. Shows you exactly what it will remove and asks to confirm; add `--yes` to skip the prompt. Your global memory and other projects are left alone. |

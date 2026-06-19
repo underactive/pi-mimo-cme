@@ -52,7 +52,7 @@ src/
   tasks.ts      @juicesharp/rpiv-todo task-graph reader → checkpoint §4 "Task tree"        [pure, no DB]
   guard.ts      path guard for write/edit under the memory root                   [pure]
   tools.ts      `memory` + `history` tool definitions
-  commands.ts   /memory (status/search/metrics/validations/dream/distill), /dream, /distill, reconcile+notify, status text
+  commands.ts   /memory (status/search/preview/metrics/validations/dream/distill), /dream, /distill, reconcile+notify, status text
   prompts/      checkpoint-writer.ts, dream.ts, distill.ts — adapted MiMoCode prompts (template fns)
 ```
 

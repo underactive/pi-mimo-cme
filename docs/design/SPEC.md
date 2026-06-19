@@ -266,7 +266,7 @@ Phase 2; the writer prompt's budget text + dream's prune phase carry the pressur
   distill, current sid/pid paths) via `ctx.ui.notify` or a dumped text message;
   `search <q>`: run the same search, notify top hits; `metrics`: checkpoint-writer cost
   readout; `validations`: checkpoint output-validation histogram (Phase 1 log-only).
-  Argument completions for `status|search|metrics|validations|dream|distill`.
+  Argument completions for `status|search|preview|metrics|validations|dream|distill`.
 - `/dream`, `/distill` — manual evolution passes (§5).
 - `ctx.ui.setStatus("mimo-cme", ...)` on session_start: e.g. `🧠 <n> memories` (guard
   `ctx.hasUI`).
@@ -294,7 +294,7 @@ src/actors.ts       # subagent (actor) ledger + progress.md journals from pi-sub
 src/tasks.ts        # @juicesharp/rpiv-todo task-graph reader → §4 "Task tree" (pure, no DB)
 src/guard.ts        # tool_call path guard
 src/tools.ts        # memory + history tool definitions
-src/commands.ts     # /memory (status/search/metrics/validations/dream/distill), /dream, /distill
+src/commands.ts     # /memory (status/search/preview/metrics/validations/dream/distill), /dream, /distill
 src/prompts/checkpoint-writer.ts  # adapted prompt as exported template fn
 src/prompts/dream.ts
 src/prompts/distill.ts

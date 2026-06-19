@@ -9,6 +9,7 @@ import { describeClearPlan, describeClearResult, executeClear, planClear } from 
 import { metaGet, validationSummary, writerMetricsSummary } from "./db.ts";
 import { bar, fmtK, sectionHeader, kvLine, tokenBarLine } from "./formatting.ts";
 import { getAppendixBreakdown, getRebuildBreakdown } from "./injection-breakdown.ts";
+import { buildSystemPromptAppendix, buildRebuildDump, type InjectContext } from "./inject.ts";
 import type { FooterCounts } from "./footer-counts.ts";
 import { memorySearch } from "./fts.ts";
 import {
@@ -387,9 +388,9 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   });
 
   pi.registerCommand("memory", {
-    description: "mimo-cme: status | search <query> | metrics | validations | dream | distill | clear",
+    description: "mimo-cme: status | search <query> | metrics | validations | preview | dream | distill | clear",
     getArgumentCompletions: (prefix) =>
-      ["status", "search", "metrics", "validations", "dream", "distill", "clear"]
+      ["status", "search", "metrics", "validations", "preview", "dream", "distill", "clear"]
         .filter((s) => s.startsWith(prefix))
         .map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
@@ -413,6 +414,30 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       }
       if (trimmed === "distill") {
         sendManualPass(ctx, buildDistillPrompt(deps, ctx.cwd), "distill");
+        return;
+      }
+      if (trimmed === "preview") {
+        const injectCtx: InjectContext = {
+          root: deps.root,
+          sid: ctx.sessionManager.getSessionId(),
+          pid: projectId(ctx.cwd),
+          caps: deps.config.checkpoint.pushCaps,
+        };
+        const appendix = buildSystemPromptAppendix(deps.db, injectCtx);
+        const rebuild = buildRebuildDump(deps.db, injectCtx);
+        const parts: string[] = [];
+        parts.push(sectionHeader("System Prompt Appendix (every turn)"));
+        parts.push(appendix);
+        if (rebuild !== undefined) {
+          parts.push("");
+          parts.push(sectionHeader("Rebuild Dump (last resume/fork/compaction)"));
+          parts.push(rebuild);
+        } else {
+          parts.push("");
+          parts.push(sectionHeader("Rebuild Dump (last resume/fork/compaction)"));
+          parts.push("(none — no checkpoint loaded this session)");
+        }
+        showReadout(ctx, "mimo-cme:preview", parts.join("\n"));
         return;
       }
       if (trimmed.startsWith("search")) {

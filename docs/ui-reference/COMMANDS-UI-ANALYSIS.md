@@ -51,6 +51,17 @@ All commands are registered in `src/commands.ts` via `registerCommands(pi, deps)
   - Use history tool for verbatim content
   - Widen scope (session → project → global → history)
 
+#### Subcommand: `/memory preview`
+- **Usage**: `/memory preview`
+- **Handler**: Calls `showReadout(ctx, "mimo-cme:preview", ...)`
+- **Output**: Custom message with `customType: "mimo-cme:preview"`
+- **Precondition**: Requires idle state
+- **Content**: Two sections separated by `sectionHeader` dividers:
+  - **System Prompt Appendix (every turn)**: The full text of `buildSystemPromptAppendix()` — memory instructions, project MEMORY.md, global MEMORY.md, and memory keys index.
+  - **Rebuild Dump (last resume/fork/compaction)**: The full text of `buildRebuildDump()` — session checkpoint, notes, open tasks, active actors, keys index. Shows "(none — no checkpoint loaded this session)" when no resume has occurred.
+- **Side effect**: Calls `buildRebuildDump()` which sets `setRebuildBreakdown()` counters. The appendix also updates `setAppendixBreakdown()`. Both are in-memory display state; no DB mutations.
+- **Purpose**: Debugging / transparency — lets users see the exact text injected into the system prompt each turn.
+
 #### Subcommand: `/memory metrics`
 - **Usage**: `/memory metrics`
 - **Handler**: Calls `showReadout(ctx, "mimo-cme:metrics", metricsText(...))`
@@ -121,7 +132,7 @@ All commands are registered in `src/commands.ts` via `registerCommands(pi, deps)
 
 #### Argument Completions for `/memory`
 - **File**: Line 325–326
-- **Values**: `["status", "search", "metrics", "validations", "dream", "distill", "clear"]`
+- **Values**: `["status", "search", "preview", "metrics", "validations", "dream", "distill", "clear"]`
 - **Pattern**: Filters by prefix
 
 ---

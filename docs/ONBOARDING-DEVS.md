@@ -87,7 +87,7 @@ src/
   checkpoint-validator.ts # log-only checkpoint output validator (Phase 1) — scores §-sections vs spec, no enforce/retry   [pure]
   guard.ts        # path guard for write/edit under the memory root           [pure]
   tools.ts        # `memory` + `history` tool definitions
-  commands.ts     # /memory (status/search/metrics/validations/dream/distill), /dream, /distill, reconcileAndNotify, status text
+  commands.ts     # /memory (status/search/preview/metrics/validations/dream/distill), /dream, /distill, reconcileAndNotify, status text
   prompts/
     checkpoint-writer.ts   # adapted MiMoCode checkpoint-writer prompt (template fn)
     dream.ts               # adapted dream.txt

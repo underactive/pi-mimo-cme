@@ -27,7 +27,7 @@ This directory contains comprehensive documentation of all user-facing surfaces 
 
 **Contains**:
 - Commands (7 entry points):
-  - `/memory` (hub with 6 subcommands: status, search, metrics, validations, dream, distill, clear)
+  - `/memory` (hub with 7 subcommands: status, search, preview, metrics, validations, dream, distill, clear)
   - `/dream` (alias)
   - `/distill` (alias)
   - Full handler signatures, preconditions, output types, and content templates
@@ -72,6 +72,7 @@ This directory contains comprehensive documentation of all user-facing surfaces 
 All memory-related commands flow through the single `/memory` entry point, with subcommands:
 - **status** (default) — Display index counts, file paths, auto-pass timestamps
 - **search** — BM25 full-text over memory layers (also callable as a tool)
+- **preview** — Dump the actual injected content (system-prompt appendix + rebuild dump)
 - **metrics** — Writer cost analysis (Phase 3 instrumentation)
 - **validations** — Checkpoint quality histogram (Phase 1 observation)
 - **dream** — Manual consolidation pass (alias: `/dream`)

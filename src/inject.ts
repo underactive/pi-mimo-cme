@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { buildActiveActorsSection } from "./actors.ts";
 import { budgetText, budgetedRead, estimateTokens } from "./budget.ts";
+import { setAppendixBreakdown, setRebuildBreakdown } from "./injection-breakdown.ts";
 import type { PushCaps } from "./config.ts";
 import {
   checkpointPath,
@@ -72,6 +73,7 @@ This is your ONLY legal scratchpad — don't create \`learning.md\`, \`scratch.m
 - Don't Edit checkpoint.md — that's the writer's domain.
 - Don't create memory files other than notes.md (no learning.md, no scratch.md). Use notes.md for any free-form entry.
 - Don't ask the user about something memory may already record — search first via the memory tool / Grep / Read.
+- Don't repeatedly append to notes.md with overlapping or redundant entries. Each turn entry must convey new information — if you already recorded "validation complete, ready to commit" in a prior entry, don't add another entry saying the same thing. The checkpoint writer reconciles notes at checkpoint time; you don't need to keep notes.md synchronized with every intermediate step. One distinct entry per meaningful milestone is enough.
 
 ## Active recall protocol
 
@@ -211,7 +213,16 @@ function appendixCacheKey(state: InjectState, ctx: InjectContext): string {
 export function buildSystemPromptAppendix(db: DatabaseSync, ctx: InjectContext): string {
   const state = stateFor(db);
   const key = appendixCacheKey(state, ctx);
-  if (state.appendix?.key === key) return state.appendix.value;
+  if (state.appendix?.key === key) {
+    setAppendixBreakdown({
+      instructions: 0,
+      projectMem: 0,
+      globalMem: 0,
+      keys: 0,
+      cached: true,
+    });
+    return state.appendix.value;
+  }
 
   const sections: string[] = [buildMemoryInstructions(ctx)];
   const dumped = new Set<string>();
@@ -233,6 +244,13 @@ export function buildSystemPromptAppendix(db: DatabaseSync, ctx: InjectContext):
   }
   const value = sections.join("\n\n");
   state.appendix = { key, value };
+  setAppendixBreakdown({
+    instructions: estimateTokens(sections[0]!),
+    projectMem: project !== undefined ? estimateTokens(project) : 0,
+    globalMem: global !== undefined ? estimateTokens(global) : 0,
+    keys: keys !== undefined ? estimateTokens(keys) : 0,
+    cached: false,
+  });
   return value;
 }
 
@@ -301,5 +319,24 @@ export function buildRebuildDump(
   sections.push(
     "Resume directly. Do not acknowledge this memory dump, do not recap — continue the work as if the conversation had never been interrupted.",
   );
+  // Track per-section token counts for the resume toast (index.ts reads these
+  // synchronously after buildRebuildDump returns). Derive key count from the
+  // existing `keys` variable (already computed by memoryKeysIndex) to avoid
+  // running the same query twice.
+  const keyCount = keys !== undefined ? keys.split("\n").filter((l) => l.startsWith("- ")).length : 0;
+  // Parse actor count from the section text: buildActiveActorsSection returns
+  // a markdown table where each data row is a running/created actor.
+  let actorCount = 0;
+  if (actors !== undefined) {
+    actorCount = actors.split("\n").filter((l) => l.match(/^\|.*\|$/)).length - 1; // subtract header row
+    if (actorCount < 0) actorCount = 0;
+  }
+  setRebuildBreakdown({
+    checkpoint: estimateTokens(budgetText(checkpointRaw!, ctx.caps.checkpoint, cpPath)),
+    notes: notes !== undefined ? estimateTokens(notes) : 0,
+    keyCount,
+    keysTokens: keys !== undefined ? estimateTokens(keys) : 0,
+    actorCount,
+  });
   return sections.join("\n\n");
 }
