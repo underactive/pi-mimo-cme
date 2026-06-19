@@ -185,6 +185,8 @@ From `AGENTS.md`, the critical ones:
 | `/memory` or `/memory status` | Full status report: index counts, history rows, injection overhead, session/project/global paths |
 | `/memory search <query>` | BM25 search over all memory files (same search the agent uses on every turn) |
 | `/memory preview` | Shows the exact system-prompt appendix + any rebuild dump |
+| `/memory system-prompt` | Dumps the full system prompt sent to the LLM (harness + extensions + CME) |
+| `/memory system-prompt size` | Shows character and token count of the full system prompt |
 | `/memory metrics` | Checkpoint writer cost readout — tokens, cost, fork-vs-delta verdict |
 | `/memory validations` | How each checkpoint scored against the 11-section spec (Phase 1 quality log) |
 | `/memory clear` | Wipe this project's memory (moves to `trash/` — recoverable). Requires confirmation |
@@ -434,7 +436,9 @@ Lines are timestamped `[YYYY-MM-DDTHH:MM:SS.sssZ]`. Look for:
 
 ### Q: I need to see exactly what the agent receives every turn.
 
-Run `/memory preview`. It shows the complete system-prompt appendix (memory instructions + project/global memory + keys index) plus the rebuild dump (checkpoint + notes + tasks + actors). This is the literal text CME injects into each turn.
+Two options:
+- **`/memory preview`** — shows only CME's contribution (system-prompt appendix + rebuild dump).
+- **`/memory system-prompt`** — shows the **full** system prompt: pi's harness prompt + context files + skills + CME's appendix + any other extensions. This is the complete picture of what the LLM sees.
 
 ---
 

@@ -70,6 +70,9 @@ Development: `npm install`, then `npm run typecheck` and `npm test` (Node ≥ 24
 - `/memory search <query>` — run the same BM25 search the model uses; prints top hits.
 - `/memory preview` — dump the actual system-prompt appendix and rebuild dump content,
   so you can see exactly what CME injects into each turn.
+- `/memory system-prompt` — dump the full system prompt sent to the LLM: pi's harness
+  prompt + context files + skills + CME's appendix + any other extensions' contributions.
+- `/memory system-prompt size` — show total character and token count of the full system prompt.
 - `/memory metrics` — the checkpoint-writer cost readout (writer tokens vs. parent
   context per run) with a fork-vs-delta build-or-skip verdict (see divergence #5).
 - `/memory validations` — the checkpoint-writer output-validation readout: a histogram

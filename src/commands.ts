@@ -7,6 +7,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import type { CmeConfig } from "./config.ts";
 import { describeClearPlan, describeClearResult, executeClear, planClear } from "./clear.ts";
 import { metaGet, validationSummary, writerMetricsSummary } from "./db.ts";
+import { estimateTokens } from "./budget.ts";
 import { bar, fmtK, sectionHeader, kvLine, tokenBarLine } from "./formatting.ts";
 import { getAppendixBreakdown, getRebuildBreakdown } from "./injection-breakdown.ts";
 import { buildSystemPromptAppendix, buildRebuildDump, type InjectContext } from "./inject.ts";
@@ -388,9 +389,9 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   });
 
   pi.registerCommand("memory", {
-    description: "mimo-cme: status | search <query> | metrics | validations | preview | dream | distill | clear",
+    description: "mimo-cme: status | search <query> | metrics | validations | preview | system-prompt | system-prompt size | dream | distill | clear",
     getArgumentCompletions: (prefix) =>
-      ["status", "search", "metrics", "validations", "preview", "dream", "distill", "clear"]
+      ["status", "search", "metrics", "validations", "preview", "system-prompt", "system-prompt size", "dream", "distill", "clear"]
         .filter((s) => s.startsWith(prefix))
         .map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
@@ -438,6 +439,24 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
           parts.push("(none — no checkpoint loaded this session)");
         }
         showReadout(ctx, "mimo-cme:preview", parts.join("\n"));
+        return;
+      }
+      if (trimmed === "system-prompt" || trimmed.startsWith("system-prompt ")) {
+        const sub = trimmed.slice("system-prompt".length).trim();
+        if (sub === "size") {
+          const prompt = ctx.getSystemPrompt();
+          const tokens = estimateTokens(prompt);
+          const lines = [
+            sectionHeader("System Prompt Size"),
+            kvLine("Characters", prompt.length.toLocaleString()),
+            kvLine("Estimated tokens", fmtK(tokens)),
+            "",
+            "Note: size reflects the full system prompt (harness + context + skills + CME + other extensions).",
+          ];
+          showReadout(ctx, "mimo-cme:system-prompt:size", lines.join("\n"));
+          return;
+        }
+        showReadout(ctx, "mimo-cme:system-prompt", ctx.getSystemPrompt());
         return;
       }
       if (trimmed.startsWith("search")) {
