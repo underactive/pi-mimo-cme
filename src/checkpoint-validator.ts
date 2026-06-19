@@ -18,6 +18,7 @@
  * templates, never from a hand-maintained copy, so the validator follows the
  * template automatically when it changes.
  */
+import { estimateTokens } from "./budget.ts";
 import {
   CHECKPOINT_SECTION_BUDGETS,
   CHECKPOINT_TEMPLATE,
@@ -58,10 +59,7 @@ export interface ValidatorInput {
  */
 export const BUDGET_TOLERANCE = 0.15;
 
-/** The codebase-wide ~4-chars/token estimate (matches recordMetrics, renderSectionBudgets). */
-function estimateTokens(s: string): number {
-  return Math.ceil(s.length / 4);
-}
+
 
 interface Section {
   /** Full header line, trimmed (e.g. "## §6 Files and code sections"). */

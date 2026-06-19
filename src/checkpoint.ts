@@ -36,9 +36,7 @@ interface MessageLike {
   isError?: boolean;
 }
 
-function clip(text: string, cap: number): string {
-  return text.length <= cap ? text : text.slice(0, cap) + "…";
-}
+import { clip } from "./text-utils.ts";
 
 /** Read a file, returning the fallback when it's missing/unreadable. */
 function readFileOr(filePath: string, fallback: string): string {

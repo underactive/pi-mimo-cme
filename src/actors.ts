@@ -23,8 +23,8 @@
  * injectable for deterministic tests; it defaults to Date.now.
  */
 import * as fs from "node:fs";
-import { estimateTokens } from "./budget.ts";
 import { actorTaskDir, progressPath } from "./paths.ts";
+import { capLines, clip, oneLine } from "./text-utils.ts";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 
 /** The five pi-subagents lifecycle phases we observe. */
@@ -78,13 +78,6 @@ function asTokenCount(v: unknown): number {
 }
 /** Terminal statuses pi-subagents reports on subagents:completed|failed payloads. */
 const TERMINAL_STATUSES = new Set(["completed", "error", "stopped", "aborted"]);
-function clip(text: string, cap: number): string {
-  return text.length <= cap ? text : text.slice(0, cap) + "…";
-}
-/** Collapse a multi-line value to a single trimmed line for ledger renderers. */
-function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
 
 /** Maps a lifecycle phase to the status stored in the ledger. */
 function statusFor(phase: ActorPhase): string {
@@ -176,6 +169,9 @@ export class ActorLedger {
   }
 
   private exists(sid: string, id: string): boolean {
+    // Fast path: if the actor is in the in-memory active set, it definitely exists.
+    const active = this.activeIds.get(sid);
+    if (active?.has(id)) return true;
     return this.existsStmt.get(sid, id) !== undefined;
   }
 
@@ -346,21 +342,6 @@ function renderLine(r: LedgerRow): string {
   return clip(`- ${r.id} · ${type} · ${r.status} — ${summary}`, LINE_CAP) + meta;
 }
 
-/** Accumulate rendered lines until the token cap, noting any dropped tail. */
-function capLines(lines: string[], capTokens: number): string {
-  let body = "";
-  let dropped = 0;
-  for (const [i, line] of lines.entries()) {
-    const next = body + line + "\n";
-    if (estimateTokens(next) > capTokens) {
-      dropped = lines.length - i;
-      break;
-    }
-    body = next;
-  }
-  if (dropped > 0) body += `…and ${dropped} more (see tasks/<id>/progress.md)\n`;
-  return body.trimEnd();
-}
 
 /**
  * The SUBAGENT PROGRESS block inlined into the checkpoint-writer prompt — every
@@ -373,7 +354,7 @@ export function buildSubagentProgress(db: DatabaseSync, sid: string, capTokens: 
     .prepare(`SELECT ${SELECT_COLS} FROM actor WHERE session_id = ? ORDER BY updated_at DESC`)
     .all(sid) as unknown as LedgerRow[];
   if (rows.length === 0) return "";
-  return capLines(rows.map(renderLine), capTokens);
+  return capLines(rows.map(renderLine), capTokens, "(see tasks/<id>/progress.md)");
 }
 
 /**
@@ -398,5 +379,5 @@ export function buildActiveActorsSection(
     const desc = oneLine(r.description || r.result_summary || "(no description)");
     return clip(`- ${r.id} · ${r.type || "subagent"} · ${r.status} — ${desc}`, LINE_CAP);
   });
-  return capLines(lines, capTokens);
+  return capLines(lines, capTokens, "(see tasks/<id>/progress.md)");
 }

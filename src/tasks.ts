@@ -18,7 +18,7 @@
  * branch, so unlike the actor ledger there is nothing to store. Runs under plain
  * `node --test`.
  */
-import { estimateTokens } from "./budget.ts";
+import { capLines, clip, oneLine } from "./text-utils.ts";
 
 /** rpiv-todo statuses (tool/types.ts:26). `deleted` is terminal/hidden. */
 export type TodoStatus = "pending" | "in_progress" | "completed" | "deleted";
@@ -37,12 +37,7 @@ export interface TodoTask {
 /** Clip applied to a single rendered task line. */
 const LINE_CAP = 200;
 
-function clip(text: string, cap: number): string {
-  return text.length <= cap ? text : text.slice(0, cap) + "…";
-}
-function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
+
 
 /**
  * Discriminator for the `details` envelope, byte-compatible with rpiv-todo's
@@ -106,21 +101,6 @@ function renderTaskLine(t: TodoTask): string {
   return clip(`- [${t.status}] #${t.id} ${oneLine(t.subject)}${form}${block}${owner}`, LINE_CAP);
 }
 
-/** Accumulate lines until the token cap, noting any dropped tail. */
-function capLines(lines: string[], capTokens: number): string {
-  let body = "";
-  let dropped = 0;
-  for (const [i, line] of lines.entries()) {
-    const next = body + line + "\n";
-    if (estimateTokens(next) > capTokens) {
-      dropped = lines.length - i;
-      break;
-    }
-    body = next;
-  }
-  if (dropped > 0) body += `…and ${dropped} more (use the todo tool to list)\n`;
-  return body.trimEnd();
-}
 
 /**
  * Render the task graph as condensed lines, ordered in_progress → pending →
@@ -140,5 +120,5 @@ export function buildTaskTree(
   const sorted = [...view].sort(
     (a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9) || a.id - b.id,
   );
-  return capLines(sorted.map(renderTaskLine), capTokens);
+  return capLines(sorted.map(renderTaskLine), capTokens, "(use the todo tool to list)");
 }
