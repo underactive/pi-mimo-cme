@@ -180,14 +180,22 @@ export function reconcile(db: DatabaseSync, opts: ReconcileOptions): ReconcileSt
     // Prune any indexed row not produced by the current walk — covers both
     // deleted files and scopes no longer walked (e.g. cc once ccIndex is toggled
     // off, whose files still exist on disk but must leave the index).
-    const allRows = db.prepare("SELECT id, path FROM memory_fts").all() as unknown as {
-      id: number;
-      path: string;
-    }[];
-    const del = db.prepare("DELETE FROM memory_fts WHERE id = ?");
-    for (const row of allRows) {
-      if (seen.has(row.path)) continue;
-      del.run(row.id);
+    // SQL-driven approach: use a LEFT JOIN to find rows whose path is not in
+    // the current walk's `seen` set, avoiding loading all rows into JS.
+    // Insert seen paths into a temp table and anti-join.
+    db.exec("CREATE TEMPORARY TABLE IF NOT EXISTS _reconcile_seen (path TEXT)");
+    db.exec("DELETE FROM _reconcile_seen");
+    const insSeen = db.prepare("INSERT INTO _reconcile_seen (path) VALUES (?)");
+    for (const p of seen) insSeen.run(p);
+    const orphans = db
+      .prepare(
+        `SELECT m.id FROM memory_fts m
+         LEFT JOIN _reconcile_seen s ON m.path = s.path
+         WHERE s.path IS NULL`,
+      )
+      .all() as unknown as { id: number }[];
+    for (const row of orphans) {
+      db.prepare("DELETE FROM memory_fts WHERE id = ?").run(row.id);
       stats.removed += 1;
     }
     db.exec("COMMIT");

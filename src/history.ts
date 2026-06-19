@@ -185,6 +185,12 @@ export function backfillProject(
   } catch {
     return stats;
   }
+  // Hoist prepared statement outside the per-file loop — it doesn't depend on
+  // any per-file state and node:sqlite recompiles on every prepare().
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO history_fts (session_id, project_id, seq, kind, tool_name, body, time_created)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
   for (const name of entries) {
     const file = path.join(jsonlDir, name);
     let stat: fs.BigIntStats;
@@ -207,7 +213,9 @@ export function backfillProject(
     let sessionId: string | undefined;
     const messages: unknown[] = [];
     for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
+      // Early rejection: skip empty / too-short lines and lines without a
+      // "type" field without paying for JSON.parse().
+      if (line.length < 8 || !line.includes('"type"')) continue;
       let entry: { type?: string; id?: string; message?: unknown };
       try {
         entry = JSON.parse(line);
@@ -219,10 +227,6 @@ export function backfillProject(
     }
     if (!sessionId) continue;
     if (currentSessionId && sessionId === currentSessionId) continue;
-    const insert = db.prepare(
-      `INSERT OR IGNORE INTO history_fts (session_id, project_id, seq, kind, tool_name, body, time_created)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    );
     db.exec("BEGIN");
     try {
       // Deterministic seq from file order so re-runs after file growth insert

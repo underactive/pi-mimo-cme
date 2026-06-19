@@ -30,6 +30,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { projectDir, projectId, sessionDir, trashDir } from "./paths.ts";
 
 /** Tables carrying BOTH session_id and project_id — the only project↔session link. */
+// SAFETY: TAGGED_TABLES is a compile-time constant; never interpolate user-derived strings into SQL table names.
 const TAGGED_TABLES = ["history_fts", "actor", "writer_metrics", "checkpoint_validations"] as const;
 
 export interface ClearScopeOptions {
@@ -92,20 +93,28 @@ function countRows(db: DatabaseSync, sql: string, params: (string | number)[] = 
  * cause us to move another project's session files).
  */
 function linkedSessionIds(db: DatabaseSync, pid: string): { linked: string[]; crossProject: string[] } {
+  // Single UNION ALL query across all tagged tables to find all session IDs
+  // linked to this project, instead of one query per table.
+  const unionAll = TAGGED_TABLES.map(
+    (t) => `SELECT DISTINCT session_id AS sid FROM ${t} WHERE project_id = ?`,
+  ).join(" UNION ALL ");
   const linked = new Set<string>();
-  for (const table of TAGGED_TABLES) {
-    const rows = db
-      .prepare(`SELECT DISTINCT session_id AS sid FROM ${table} WHERE project_id = ?`)
-      .all(pid) as unknown as { sid: string }[];
-    for (const r of rows) linked.add(r.sid);
-  }
+  const params: string[] = TAGGED_TABLES.map(() => pid);
+  const rows = db
+    .prepare(`SELECT DISTINCT sid FROM (${unionAll})`)
+    .all(...params) as unknown as { sid: string }[];
+  for (const r of rows) linked.add(r.sid);
+
+  // Find session IDs that appear under BOTH this project and another project.
+  const crossUnionAll = TAGGED_TABLES.map(
+    (t) => `SELECT DISTINCT session_id AS sid FROM ${t} WHERE project_id <> ?`,
+  ).join(" UNION ALL ");
+  const crossParams: string[] = TAGGED_TABLES.map(() => pid);
+  const crossRows = db
+    .prepare(`SELECT DISTINCT sid FROM (${crossUnionAll})`)
+    .all(...crossParams) as unknown as { sid: string }[];
   const crossProject = new Set<string>();
-  for (const table of TAGGED_TABLES) {
-    const rows = db
-      .prepare(`SELECT DISTINCT session_id AS sid FROM ${table} WHERE project_id <> ?`)
-      .all(pid) as unknown as { sid: string }[];
-    for (const r of rows) if (linked.has(r.sid)) crossProject.add(r.sid);
-  }
+  for (const r of crossRows) if (linked.has(r.sid)) crossProject.add(r.sid);
   return { linked: [...linked], crossProject: [...crossProject] };
 }
 
