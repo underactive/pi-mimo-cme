@@ -4,6 +4,21 @@
  * Factory: env recursion guard, open DB, wire events/tools/commands, close on
  * session_shutdown. Every handler is wrapped so memory failures never break
  * the session (SPEC §9.5).
+ *
+ * Major sections (approximate line ranges at time of writing):
+ *   Imports + resolvePiCommand      ~lines 1–55
+ *   piMimoCme factory + DB/config   ~lines 57–100
+ *   latestCtx shim + error reporting ~lines 100–140
+ *   safe() wrapper                  ~lines 140–160
+ *   Writer (in-process checkpoint)   ~lines 160–260
+ *   CheckpointManager wiring         ~lines 260–310
+ *   System prompt injection          ~lines 310–370
+ *   History indexer (layer 4)         ~lines 370–400
+ *   turn_end threshold check          ~lines 400–420
+ *   session_before_compact            ~lines 420–440
+ *   Path guard                        ~lines 440–460
+ *   Bus handlers (actor ledger)       ~lines 460–510
+ *   session_shutdown + tool/command registration ~lines 510–530
  */
 import * as fs from "node:fs";
 import * as path from "node:path";

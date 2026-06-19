@@ -90,6 +90,11 @@ export function loadConfig(root: string): CmeConfig {
 }
 
 export function mergeConfig(base: CmeConfig, overlay: Record<string, unknown>): CmeConfig {
+  // NOTE: When adding a CmeConfig field:
+  // 1. Add to the CmeConfig interface
+  // 2. Add a default to DEFAULT_CONFIG
+  // 3. Add a validated branch here
+  // 4. Update README config docs
   const out: CmeConfig = structuredClone(base);
   const o = overlay as Partial<Record<keyof CmeConfig, Record<string, unknown>>>;
   if (o.checkpoint && typeof o.checkpoint === "object") {

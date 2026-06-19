@@ -95,6 +95,17 @@ Don't ask the user about something memory may already record.`;
  * recompiles SQL on every prepare(), and these run every turn) plus the cached
  * appendix. Keyed by DB handle in a WeakMap, so it's per-session (one handle
  * per session) and GC'd when the DB closes — never a cross-session singleton.
+ *
+ * Caching strategy:
+ * - WeakMap<DatabaseSync, InjectState>: one entry per live DB handle. When a
+ *   session ends and db.close() is called, the handle becomes unreachable and
+ *   the WeakMap entry is GC'd. This prevents stale state leaking across sessions.
+ * - `appendix`: the final concatenated system-prompt appendix string, plus the
+ *   cache key that produced it. On each turn, buildSystemPromptAppendix()
+ *   recomputes the key and compares — if nothing changed (same file stats, same
+ *   index counts), the cached string is returned with zero I/O.
+ * - keysStmt / aggStmt: prepared statements reused across turns for the same
+ *   handle. node:sqlite compiles SQL on every prepare(); reusing avoids that cost.
  */
 interface InjectState {
   keysStmt: StatementSync;
@@ -154,6 +165,19 @@ export function memoryKeysIndex(
  * MAX is monotonic (reconcile stamps Date.now()), so it catches an add+prune
  * that nets a zero count delta. Errs toward over-invalidation: an unrelated cc
  * file change rebuilds an identical string — wasteful, never stale.
+ *
+ * Key fields (pipe-separated):
+ *   root              — memory root dir; changes if user moves it
+ *   sid               — session ID; different sessions have different dumps
+ *   pid               — project ID; different projects have different memory files
+ *   caps.memory       — token cap for project memory; user-configurable
+ *   caps.global       — token cap for global memory; user-configurable
+ *   caps.memoryKeys   — token cap for the keys index; user-configurable
+ *   stat(projectPath) — size-mtimeNs of MEMORY.md; catches content edits
+ *   stat(globalPath)  — size-mtimeNs of global MEMORY.md; catches edits
+ *   agg.n             — COUNT(*) over memory_fts; catches any add/prune
+ *   agg.mx            — MAX(last_indexed_at); monotonic; catches net-zero count
+ *                     — changes (add + delete that cancel in count)
  */
 function appendixCacheKey(state: InjectState, ctx: InjectContext): string {
   const statKey = (p: string): string => {
