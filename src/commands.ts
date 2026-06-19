@@ -7,6 +7,8 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import type { CmeConfig } from "./config.ts";
 import { describeClearPlan, describeClearResult, executeClear, planClear } from "./clear.ts";
 import { metaGet, validationSummary, writerMetricsSummary } from "./db.ts";
+import { bar, fmtK, sectionHeader, kvLine, tokenBarLine } from "./formatting.ts";
+import { getAppendixBreakdown, getRebuildBreakdown } from "./injection-breakdown.ts";
 import type { FooterCounts } from "./footer-counts.ts";
 import { memorySearch } from "./fts.ts";
 import {
@@ -78,12 +80,14 @@ export function reconcileAndNotify(deps: CommandDeps): void {
   deps.notify?.(`🔄 mimo-cme: memory indexed — ${parts.join(", ")}`);
 }
 
-function statusText(deps: CommandDeps, cwd: string, sid: string): string {
+function statusText(deps: CommandDeps, cwd: string, sid: string, contextWindow?: number): string {
   const { db, root } = deps;
   const pid = projectId(cwd);
+  const cw = contextWindow ?? 200_000;
   const scopes = db
     .prepare("SELECT scope, COUNT(*) AS n FROM memory_fts GROUP BY scope ORDER BY scope")
     .all() as unknown as { scope: string; n: number }[];
+  const totalIdx = scopes.reduce((s, r) => s + r.n, 0);
   const history = db.prepare("SELECT COUNT(*) AS n FROM history_fts").get() as { n: number };
   const projectHistory = db
     .prepare("SELECT COUNT(*) AS n FROM history_fts WHERE project_id = ?")
@@ -101,22 +105,70 @@ function statusText(deps: CommandDeps, cwd: string, sid: string): string {
     const v = metaGet(db, key);
     return v ? new Date(Number(v)).toISOString() : "never";
   };
+
+  // --- Injection breakdown (zero-cost in-memory read) ---
+  const ab = getAppendixBreakdown();
+  const injectionLines: string[] = [];
+  injectionLines.push("", sectionHeader("Injection Overhead"));
+  if (ab) {
+    const total = ab.instructions + ab.projectMem + ab.globalMem + ab.keys;
+    injectionLines.push(
+      kvLine("instructions", `≈${fmtK(ab.instructions)} tok`),
+      kvLine("project MEMORY.md", `≈${fmtK(ab.projectMem)} tok`),
+      kvLine("global MEMORY.md", `≈${fmtK(ab.globalMem)} tok`),
+      kvLine("keys index", `≈${fmtK(ab.keys)} tok`),
+      tokenBarLine("total:", total, cw, cw),
+      kvLine("cached", ab.cached ? "yes (same as last turn)" : "no (just computed)"),
+    );
+  } else {
+    injectionLines.push(kvLine("", "(not yet computed this session)"));
+  }
+
+  // --- Rebuild breakdown (populated on resume/fork/compaction, undefined otherwise) ---
+  const rb = getRebuildBreakdown();
+  const rebuildLines: string[] = [];
+  rebuildLines.push("", sectionHeader("Rebuild Dump (last resume)"));
+  if (rb && (rb.checkpoint > 0 || rb.notes > 0)) {
+    rebuildLines.push(
+      kvLine("checkpoint", `≈${fmtK(rb.checkpoint)} tok`),
+      kvLine("notes", `≈${fmtK(rb.notes)} tok`),
+      kvLine("keys", String(rb.keyCount)),
+      kvLine("actors", String(rb.actorCount)),
+      kvLine("total", `≈${fmtK(rb.checkpoint + rb.notes + rb.keysTokens)} tok`),
+    );
+  } else {
+    rebuildLines.push(kvLine("", "(no rebuild yet this session)"));
+  }
+
+  const scopeText = scopes.length === 0 ? "0" : scopes.map((s) => `${s.scope}=${s.n}`).join(" ");
+  const actorText = actorRows.length === 0 ? "none" : actorRows.map((a) => `${a.status}=${a.n}`).join(" ");
+
   const lines = [
     "mimo-cme memory status",
     "",
-    `memory files indexed: ${scopes.length === 0 ? "0" : scopes.map((s) => `${s.scope}=${s.n}`).join(" ")}`,
-    `history rows: ${history.n} total, ${projectHistory.n} this project`,
-    `subagents (this session): ${actorRows.length === 0 ? "none" : actorRows.map((a) => `${a.status}=${a.n}`).join(" ")}`,
-    `db: ${dbPath(root)} (${(dbSize / 1024).toFixed(1)} KB)`,
-    `last dream: ${fmtMeta(`last_dream_at:${pid}`)} (auto=${deps.config.dream.auto}, every ${deps.config.dream.intervalDays}d)`,
-    `last distill: ${fmtMeta(`last_distill_at:${pid}`)} (auto=${deps.config.distill.auto}, every ${deps.config.distill.intervalDays}d)`,
+    sectionHeader("Memory Index"),
+    tokenBarLine("memory files:", totalIdx, Math.max(totalIdx, 100), cw),
+    kvLine("", scopeText),
+    tokenBarLine("history rows:", history.n, Math.max(history.n, 1000), cw),
+    kvLine("", `${history.n} total · ${projectHistory.n} this project`),
+    ...injectionLines,
+    ...rebuildLines,
     "",
-    `session  ${sid}`,
-    `  checkpoint: ${checkpointPath(sid, root)}`,
-    `  notes:      ${notesPath(sid, root)}`,
-    `project  ${pid}`,
-    `  memory:     ${projectMemoryPath(pid, root)}`,
-    `global   ${globalMemoryPath(root)}`,
+    sectionHeader("Session"),
+    kvLine("session", sid),
+    kvLine("checkpoint", checkpointPath(sid, root)),
+    kvLine("notes", notesPath(sid, root)),
+    kvLine("subagents", actorText),
+    "",
+    sectionHeader("Project"),
+    kvLine("project", pid),
+    kvLine("memory", projectMemoryPath(pid, root)),
+    kvLine("global", globalMemoryPath(root)),
+    "",
+    sectionHeader("Meta"),
+    kvLine("db", `${dbPath(root)} (${(dbSize / 1024).toFixed(1)} KB)`),
+    kvLine("last dream", `${fmtMeta(`last_dream_at:${pid}`)} (auto=${deps.config.dream.auto}, every ${deps.config.dream.intervalDays}d)`),
+    kvLine("last distill", `${fmtMeta(`last_distill_at:${pid}`)} (auto=${deps.config.distill.auto}, every ${deps.config.distill.intervalDays}d)`),
   ];
   return lines.join("\n");
 }
@@ -129,8 +181,9 @@ function statusText(deps: CommandDeps, cwd: string, sid: string): string {
  * every checkpoint a warm hit) against what the writer pays in full-price input
  * today. If even that best case loses, the fork is not worth building.
  */
-export function metricsText(deps: CommandDeps, cwd: string): string {
+export function metricsText(deps: CommandDeps, cwd: string, contextWindow?: number): string {
   const pid = projectId(cwd);
+  const cw = contextWindow ?? 200_000;
   const proj = writerMetricsSummary(deps.db, { projectId: pid });
   const all = writerMetricsSummary(deps.db);
   if (all.n === 0) {
@@ -144,27 +197,34 @@ export function metricsText(deps: CommandDeps, cwd: string): string {
   }
   const fmt = (n: number) => Math.round(n).toLocaleString();
   const parent = proj.avgParentTokens;
-  const forkBestCase = parent == null ? null : parent * 0.1; // cache-read ≈ 10% of input price
+  const forkBestCase = parent == null ? null : parent * 0.1;
   const verdict =
     parent == null
       ? "no parent-context sizes captured — cannot compare against a fork"
       : forkBestCase! > proj.avgInput
         ? `fork LOSES even best case: ~${fmt(forkBestCase!)} cache-read tok/run > ${fmt(proj.avgInput)} full-price input now → Phase 3 not worth building`
         : `fork MIGHT help: best case ~${fmt(forkBestCase!)} cache-read tok/run < ${fmt(proj.avgInput)} full-price input now → worth deeper measurement`;
+  const okRate = proj.n > 0 ? Math.round((proj.okCount / proj.n) * 100) : 0;
+  void cw; // available for future bar() calls if needed
   return [
     'mimo-cme writer metrics (Phase 3 "measure first")',
     "",
-    `this project (${pid}): ${proj.n} run(s), ${proj.okCount} ok`,
-    `  writer tokens/run:   input≈${fmt(proj.avgInput)}  output≈${fmt(proj.avgOutput)}  total≈${fmt(proj.avgTotal)}`,
-    `  cache tokens/run:    read≈${fmt(proj.avgCacheRead)}  write≈${fmt(proj.avgCacheWrite)}   (read≈0 = no prefix reuse today)`,
-    `  cost/run:            $${proj.avgCostUsd.toFixed(4)}`,
-    `  delta fed/run:       ≈${fmt(proj.avgDeltaTokensEst)} tok`,
-    `  parent ctx at fire:  ${parent == null ? "n/a" : "≈" + fmt(parent) + " tok"}   (what a fork=true writer would carry)`,
-    `  wall-clock/run:      ${fmt(proj.avgDurationMs)} ms`,
+    sectionHeader("This Project"),
+    kvLine("runs", `${proj.n} (${proj.okCount} ok, ${okRate}% success)`),
+    kvLine("writer tokens/run", `input≈${fmt(proj.avgInput)}  output≈${fmt(proj.avgOutput)}  total≈${fmt(proj.avgTotal)}`),
+    kvLine("cache tokens/run", `read≈${fmt(proj.avgCacheRead)}  write≈${fmt(proj.avgCacheWrite)}`),
+    kvLine("cost/run", `$${proj.avgCostUsd.toFixed(4)}`),
+    kvLine("delta fed/run", `≈${fmt(proj.avgDeltaTokensEst)} tok`),
+    kvLine("parent ctx at fire", parent == null ? "n/a" : `≈${fmt(parent)} tok`),
+    kvLine("wall-clock/run", `${fmt(proj.avgDurationMs)} ms`),
     "",
-    `verdict: ${verdict}`,
+    sectionHeader("Fork Verdict"),
+    kvLine("verdict", verdict),
     "",
-    `all projects: ${all.n} run(s) · writer input≈${fmt(all.avgInput)} tok · parent≈${all.avgParentTokens == null ? "n/a" : fmt(all.avgParentTokens) + " tok"}`,
+    sectionHeader("All Projects"),
+    kvLine("runs", `${all.n} (${all.okCount} ok)`),
+    kvLine("writer input", `≈${fmt(all.avgInput)} tok`),
+    kvLine("parent ctx", all.avgParentTokens == null ? "n/a" : `≈${fmt(all.avgParentTokens)} tok`),
   ].join("\n");
 }
 
@@ -194,19 +254,25 @@ export function validationText(deps: CommandDeps, cwd: string): string {
   return [
     'mimo-cme checkpoint validations (Phase 1 "measure first")',
     "",
-    `this project (${pid}): ${proj.n} checkpoint(s) validated`,
-    `  clean (no error/extract):  ${proj.cleanCount} (${pct(proj.cleanCount, proj.n)})`,
-    `  with error:                ${proj.withError} (${pct(proj.withError, proj.n)})`,
-    `  with extract-required:     ${proj.withExtract} (${pct(proj.withExtract, proj.n)})`,
-    `  with warn:                 ${proj.withWarn} (${pct(proj.withWarn, proj.n)})`,
-    `  avg violations/run:        error≈${proj.avgError.toFixed(2)} extract≈${proj.avgExtract.toFixed(2)} warn≈${proj.avgWarn.toFixed(2)}`,
-    `  worst budget overrun:      ${proj.maxOverrunPct}%`,
-    `  code histogram (runs):`,
+    sectionHeader("This Project"),
+    kvLine("checkpoints", `${proj.n} validated`),
+    "",
+    `  clean rate:  ${bar(proj.cleanCount, proj.n)}  ${proj.cleanCount} (${pct(proj.cleanCount, proj.n)})`,
+    "",
+    kvLine("with error", `${proj.withError} (${pct(proj.withError, proj.n)})`),
+    kvLine("with extract-required", `${proj.withExtract} (${pct(proj.withExtract, proj.n)})`),
+    kvLine("with warn", `${proj.withWarn} (${pct(proj.withWarn, proj.n)})`),
+    kvLine("avg violations/run", `error≈${proj.avgError.toFixed(2)} extract≈${proj.avgExtract.toFixed(2)} warn≈${proj.avgWarn.toFixed(2)}`),
+    kvLine("worst budget overrun", `${proj.maxOverrunPct}%`),
+    "",
+    sectionHeader("Code Histogram"),
     histText,
     "",
-    `Phase 2 (retry + revert) is gated on this data — see docs/FUTURE-IMPROVEMENTS.md.`,
+    sectionHeader("All Projects"),
+    kvLine("validated", `${all.n}`),
+    kvLine("clean", `${all.cleanCount} (${pct(all.cleanCount, all.n)})`),
     "",
-    `all projects: ${all.n} validated, ${all.cleanCount} clean (${pct(all.cleanCount, all.n)})`,
+    `Phase 2 (retry + revert) is gated on this data — see docs/FUTURE-IMPROVEMENTS.md.`,
   ].join("\n");
 }
 
@@ -337,7 +403,8 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         return;
       }
       if (trimmed === "metrics") {
-        showReadout(ctx, "mimo-cme:metrics", metricsText(deps, ctx.cwd));
+        const metricsUsage = ctx.getContextUsage();
+        showReadout(ctx, "mimo-cme:metrics", metricsText(deps, ctx.cwd, metricsUsage?.contextWindow));
         return;
       }
       if (trimmed === "validations") {
@@ -370,7 +437,12 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         return;
       }
       // default / "status"
-      showReadout(ctx, "mimo-cme:status", statusText(deps, ctx.cwd, ctx.sessionManager.getSessionId()));
+      const statusUsage = ctx.getContextUsage();
+      showReadout(
+        ctx,
+        "mimo-cme:status",
+        statusText(deps, ctx.cwd, ctx.sessionManager.getSessionId(), statusUsage?.contextWindow),
+      );
     },
   });
 }

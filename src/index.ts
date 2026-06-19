@@ -45,6 +45,8 @@ import { FooterCounts } from "./footer-counts.ts";
 import { checkMemoryWrite } from "./guard.ts";
 import { backfillProject, HistoryIndexer } from "./history.ts";
 import { buildRebuildDump, buildSystemPromptAppendix } from "./inject.ts";
+import { getRebuildBreakdown, formatAppendixFooterLabel, resetBreakdowns } from "./injection-breakdown.ts";
+import { fmtK } from "./formatting.ts";
 import { agentDir, dbPath, logsDir, memoryRoot, projectId, sessionsJsonlDir } from "./paths.ts";
 import { reconcile } from "./reconcile.ts";
 import { buildTaskTree, readTaskSnapshot } from "./tasks.ts";
@@ -291,10 +293,16 @@ export default function piMimoCme(pi: ExtensionAPI) {
     // In-flight subagents are intentionally NOT shown here: the pi-subagents
     // extension already renders that count, so a `· N actors` segment would be
     // redundant. The ledger still tracks them for checkpoint §4 / the rebuild dump.
+    const injectLabel = formatAppendixFooterLabel();
     const gray = "\x1b[38;5;244m";
     const reset = "\x1b[0m";
-    ctx.ui.setStatus("mimo-cme", `${gray}󰍛 ${memIdx} idx · ${projHist} hist${reset}`);
+    ctx.ui.setStatus(
+      "mimo-cme",
+      `${gray}󰍛 ${memIdx} idx · ${projHist} hist${injectLabel ? ` ${injectLabel}` : ""}${reset}`,
+    );
   }
+
+  // (fmtK imported from formatting.ts)
 
   /**
    * Absolute paths of every file under the skill/extension asset dirs (global
@@ -483,6 +491,17 @@ export default function piMimoCme(pi: ExtensionAPI) {
       // self-heal: any drift from a prior session starts fresh here.
       counts.seed(db, projectId(ctx.cwd));
       refreshStatus(ctx); // initial footer (backfill above refreshes again once it lands)
+
+      // One-shot "memory is alive" heartbeat: confirms the extension loaded and
+      // the memory pipeline is armed. 2-second delay lets the UI settle first.
+      // Fires every session start (startup, new, resume, fork) — the user
+      // always sees at least one proof-of-life signal per session.
+      if (ctx.hasUI) {
+        const snap = counts.snapshot();
+        setTimeout(() => {
+          notify(`🧠 mimo-cme: memory active — ${snap.memIdx} idx · ${snap.projHist} hist`);
+        }, 2000);
+      }
     }),
   );
 
@@ -519,6 +538,23 @@ export default function piMimoCme(pi: ExtensionAPI) {
         : "";
       const dump = buildRebuildDump(db, injectCtx(ctx), openTasks);
       if (dump === undefined) return; // checkpoint absent or all "(none yet)" — skip silently
+
+      // Post-resume summary toast: fires once, showing what memory context was restored.
+      // Uses the breakdown state set synchronously by buildRebuildDump in the call above.
+      if (ctx.hasUI) {
+        const rb = getRebuildBreakdown();
+        if (rb) {
+          const parts: string[] = [];
+          if (rb.checkpoint > 0) parts.push(`checkpoint (~${fmtK(rb.checkpoint)} tok)`);
+          if (rb.notes > 0) parts.push(`notes (~${fmtK(rb.notes)} tok)`);
+          if (rb.keyCount > 0) parts.push(`${rb.keyCount} keys`);
+          if (rb.actorCount > 0) parts.push(`${rb.actorCount} actor(s)`);
+          if (parts.length > 0) {
+            notify(`🧠 mimo-cme: session resumed — ${parts.join(" · ")}`);
+          }
+        }
+      }
+
       return { message: { customType: "mimo-cme:rebuild", content: dump, display: true } };
     }),
   );
@@ -636,6 +672,7 @@ export default function piMimoCme(pi: ExtensionAPI) {
           /* unsubscribe is best-effort */
         }
       }
+      resetBreakdowns(); // clear module-level injection breakdown state for clean next session
       db.close();
     }),
   );
