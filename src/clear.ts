@@ -93,29 +93,27 @@ function countRows(db: DatabaseSync, sql: string, params: (string | number)[] = 
  * cause us to move another project's session files).
  */
 function linkedSessionIds(db: DatabaseSync, pid: string): { linked: string[]; crossProject: string[] } {
-  // Single UNION ALL query across all tagged tables to find all session IDs
-  // linked to this project, instead of one query per table.
+  // Single pass: fetch every (session_id, project_id) pair from all tagged
+  // tables, then partition in JS. This replaces two separate UNION ALL scans
+  // (one for linked sids, one for cross-project sids) with one scan.
   const unionAll = TAGGED_TABLES.map(
-    (t) => `SELECT DISTINCT session_id AS sid FROM ${t} WHERE project_id = ?`,
+    (t) => `SELECT DISTINCT session_id AS sid, project_id AS pid FROM ${t}`,
   ).join(" UNION ALL ");
+  const allRows = db
+    .prepare(`SELECT DISTINCT sid, pid FROM (${unionAll})`)
+    .all() as unknown as { sid: string; pid: string }[];
   const linked = new Set<string>();
-  const params: string[] = TAGGED_TABLES.map(() => pid);
-  const rows = db
-    .prepare(`SELECT DISTINCT sid FROM (${unionAll})`)
-    .all(...params) as unknown as { sid: string }[];
-  for (const r of rows) linked.add(r.sid);
-
-  // Find session IDs that appear under BOTH this project and another project.
-  const crossUnionAll = TAGGED_TABLES.map(
-    (t) => `SELECT DISTINCT session_id AS sid FROM ${t} WHERE project_id <> ?`,
-  ).join(" UNION ALL ");
-  const crossParams: string[] = TAGGED_TABLES.map(() => pid);
-  const crossRows = db
-    .prepare(`SELECT DISTINCT sid FROM (${crossUnionAll})`)
-    .all(...crossParams) as unknown as { sid: string }[];
-  const crossProject = new Set<string>();
-  for (const r of crossRows) if (linked.has(r.sid)) crossProject.add(r.sid);
-  return { linked: [...linked], crossProject: [...crossProject] };
+  const otherProjectSids = new Set<string>();
+  for (const r of allRows) {
+    if (r.pid === pid) linked.add(r.sid);
+    else otherProjectSids.add(r.sid);
+  }
+  // Cross-project = linked to THIS project AND also tagged to another.
+  const crossProject: string[] = [];
+  for (const sid of linked) {
+    if (otherProjectSids.has(sid)) crossProject.push(sid);
+  }
+  return { linked: [...linked], crossProject };
 }
 
 /** Dry-run: compute the exact blast radius without touching anything. */

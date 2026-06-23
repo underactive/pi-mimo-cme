@@ -187,16 +187,25 @@ export function reconcile(db: DatabaseSync, opts: ReconcileOptions): ReconcileSt
     db.exec("DELETE FROM _reconcile_seen");
     const insSeen = db.prepare("INSERT INTO _reconcile_seen (path) VALUES (?)");
     for (const p of seen) insSeen.run(p);
-    const orphans = db
+    // Count orphans first (for stats), then delete in a single statement.
+    // The FTS5 external-content `memory_fts_ad` trigger fires per affected row
+    // even with a multi-row DELETE, so the shadow vtab stays consistent.
+    const orphanCount = db
       .prepare(
-        `SELECT m.id FROM memory_fts m
+        `SELECT COUNT(*) AS n FROM memory_fts m
          LEFT JOIN _reconcile_seen s ON m.path = s.path
          WHERE s.path IS NULL`,
       )
-      .all() as unknown as { id: number }[];
-    for (const row of orphans) {
-      db.prepare("DELETE FROM memory_fts WHERE id = ?").run(row.id);
-      stats.removed += 1;
+      .get() as { n: number };
+    if (orphanCount.n > 0) {
+      db.prepare(
+        `DELETE FROM memory_fts WHERE id IN (
+           SELECT m.id FROM memory_fts m
+           LEFT JOIN _reconcile_seen s ON m.path = s.path
+           WHERE s.path IS NULL
+        )`,
+      ).run();
+      stats.removed = orphanCount.n;
     }
     db.exec("COMMIT");
   } catch (err) {

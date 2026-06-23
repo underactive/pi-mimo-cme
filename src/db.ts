@@ -404,6 +404,9 @@ export function validationSummary(
 ): ValidationSummary {
   const where = opts.projectId ? "WHERE project_id = ?" : "";
   const params = opts.projectId ? [opts.projectId] : [];
+  // Single query: aggregate stats + codes column in one scan (GROUP_CONCAT
+  // collects the per-row codes into a separator-delimited string so we avoid a
+  // second full table scan for the histogram).
   const row = db
     .prepare(
       `SELECT
@@ -415,20 +418,21 @@ export function validationSummary(
          AVG(n_error) AS avg_error,
          AVG(n_extract) AS avg_extract,
          AVG(n_warn) AS avg_warn,
-         COALESCE(MAX(max_section_overrun_pct), 0) AS max_overrun
+         COALESCE(MAX(max_section_overrun_pct), 0) AS max_overrun,
+         GROUP_CONCAT(codes, '|') AS all_codes
        FROM checkpoint_validations ${where}`,
     )
-    .get(...params) as Record<string, number | null>;
-  const codeRows = db
-    .prepare(`SELECT codes FROM checkpoint_validations ${where}`)
-    .all(...params) as unknown as { codes: string }[];
+    .get(...params) as Record<string, number | string | null>;
+  // Parse the histogram from the concatenated codes (pipe-separated rows,
+  // comma-separated codes within each row). This avoids a second table scan.
   const codeHistogram: Record<string, number> = {};
-  for (const r of codeRows) {
-    for (const c of (r.codes || "").split(",").filter(Boolean)) {
+  const allCodes = typeof row["all_codes"] === "string" ? row["all_codes"] : "";
+  for (const rowCodes of allCodes.split("|")) {
+    for (const c of rowCodes.split(",").filter(Boolean)) {
       codeHistogram[c] = (codeHistogram[c] ?? 0) + 1;
     }
   }
-  const num = (x: number | null | undefined) => (x == null ? 0 : Number(x));
+  const num = (x: string | number | null | undefined) => (x == null ? 0 : Number(x));
   return {
     n: num(row["n"]),
     cleanCount: num(row["clean_count"]),
