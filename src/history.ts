@@ -171,6 +171,45 @@ export interface BackfillStats {
  * size-mtime fingerprint matches meta, and skips the live session (the
  * HistoryIndexer owns it; a later session start will pick the file up).
  */
+/**
+ * Async chunked variant of backfillProject. Processes one JSONL file per
+ * event-loop tick so that long backlogs don't block rendering of other
+ * extensions (statusline animations, etc.). Calls `onProgress` after each
+ * file that produced new rows so the caller can update counters/UI
+ * incrementally.
+ */
+export async function backfillProjectAsync(
+  db: DatabaseSync,
+  jsonlDir: string,
+  projectId: string,
+  kinds: readonly string[],
+  currentSessionId?: string,
+  onProgress?: (delta: BackfillStats) => void,
+): Promise<BackfillStats> {
+  const stats: BackfillStats = { files: 0, rows: 0 };
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(jsonlDir).filter((f) => f.endsWith(".jsonl"));
+  } catch {
+    return stats;
+  }
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO history_fts (session_id, project_id, seq, kind, tool_name, body, time_created)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const name of entries) {
+    const fileDelta = backfillOneFile(db, insert, path.join(jsonlDir, name), projectId, kinds, currentSessionId);
+    if (fileDelta) {
+      stats.files += 1;
+      stats.rows += fileDelta;
+      onProgress?.({ files: 1, rows: fileDelta });
+    }
+    // Yield to the event loop between files so other extensions can render.
+    await new Promise<void>((r) => setTimeout(r, 0));
+  }
+  return stats;
+}
+
 export function backfillProject(
   db: DatabaseSync,
   jsonlDir: string,
@@ -192,60 +231,74 @@ export function backfillProject(
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const name of entries) {
-    const file = path.join(jsonlDir, name);
-    let stat: fs.BigIntStats;
-    try {
-      // mtimeNs (bigint stat) discriminates same-size rewrites within one
-      // millisecond — see the matching note in reconcile.ts. Same syscall cost.
-      stat = fs.statSync(file, { bigint: true });
-    } catch {
-      continue;
-    }
-    const fingerprint = `${stat.size}-${stat.mtimeNs}`;
-    const metaKey = `backfill:${file}`;
-    if (metaGet(db, metaKey) === fingerprint) continue;
-    let text: string;
-    try {
-      text = fs.readFileSync(file, "utf8");
-    } catch {
-      continue;
-    }
-    let sessionId: string | undefined;
-    const messages: unknown[] = [];
-    for (const line of text.split("\n")) {
-      // Early rejection: skip empty / too-short lines and lines without a
-      // "type" field without paying for JSON.parse().
-      if (line.length < 8 || !line.includes('"type"')) continue;
-      let entry: { type?: string; id?: string; message?: unknown };
-      try {
-        entry = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (entry.type === "session" && typeof entry.id === "string") sessionId = entry.id;
-      else if (entry.type === "message" && entry.message) messages.push(entry.message);
-    }
-    if (!sessionId) continue;
-    if (currentSessionId && sessionId === currentSessionId) continue;
-    db.exec("BEGIN");
-    try {
-      // Deterministic seq from file order so re-runs after file growth insert
-      // only the new tail (UNIQUE(session_id, seq) + OR IGNORE).
-      let seq = 0;
-      for (const message of messages) {
-        for (const row of extractRows(message, kinds)) {
-          seq += 1;
-          insert.run(sessionId, projectId, seq, row.kind, row.toolName, row.body, row.timestamp);
-          stats.rows += 1;
-        }
-      }
-      metaSet(db, metaKey, fingerprint);
-      db.exec("COMMIT");
+    const delta = backfillOneFile(db, insert, path.join(jsonlDir, name), projectId, kinds, currentSessionId);
+    if (delta) {
       stats.files += 1;
-    } catch (err) {
-      db.exec("ROLLBACK");
-      throw err;
+      stats.rows += delta;
     }
   }
   return stats;
+}
+
+/**
+ * Process a single JSONL session file. Returns the number of rows inserted,
+ * or 0/undefined if the file was skipped (fingerprint match, missing, etc.).
+ * Shared by both the sync `backfillProject` and the async chunked variant.
+ */
+function backfillOneFile(
+  db: DatabaseSync,
+  insert: ReturnType<DatabaseSync["prepare"]>,
+  file: string,
+  projectId: string,
+  kinds: readonly string[],
+  currentSessionId?: string,
+): number | undefined {
+  let stat: fs.BigIntStats;
+  try {
+    stat = fs.statSync(file, { bigint: true });
+  } catch {
+    return undefined;
+  }
+  const fingerprint = `${stat.size}-${stat.mtimeNs}`;
+  const metaKey = `backfill:${file}`;
+  if (metaGet(db, metaKey) === fingerprint) return undefined;
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return undefined;
+  }
+  let sessionId: string | undefined;
+  const messages: unknown[] = [];
+  for (const line of text.split("\n")) {
+    if (line.length < 8 || !line.includes('"type"')) continue;
+    let entry: { type?: string; id?: string; message?: unknown };
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry.type === "session" && typeof entry.id === "string") sessionId = entry.id;
+    else if (entry.type === "message" && entry.message) messages.push(entry.message);
+  }
+  if (!sessionId) return undefined;
+  if (currentSessionId && sessionId === currentSessionId) return undefined;
+  let rows = 0;
+  db.exec("BEGIN");
+  try {
+    let seq = 0;
+    for (const message of messages) {
+      for (const row of extractRows(message, kinds)) {
+        seq += 1;
+        insert.run(sessionId, projectId, seq, row.kind, row.toolName, row.body, row.timestamp);
+        rows += 1;
+      }
+    }
+    metaSet(db, metaKey, fingerprint);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+  return rows;
 }

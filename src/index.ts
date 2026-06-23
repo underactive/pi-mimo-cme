@@ -43,7 +43,7 @@ import { loadConfig } from "./config.ts";
 import { metaGet, metaSet, openDb } from "./db.ts";
 import { FooterCounts } from "./footer-counts.ts";
 import { checkMemoryWrite } from "./guard.ts";
-import { backfillProject, HistoryIndexer } from "./history.ts";
+import { backfillProjectAsync, HistoryIndexer } from "./history.ts";
 import { buildRebuildDump, buildSystemPromptAppendix } from "./inject.ts";
 import { getRebuildBreakdown, formatAppendixFooterLabel, resetBreakdowns } from "./injection-breakdown.ts";
 import { fmtK } from "./formatting.ts";
@@ -461,24 +461,24 @@ export default function piMimoCme(pi: ExtensionAPI) {
       }
 
       // Layer-4 backfill of this project's past sessions: background + idempotent.
-      setTimeout(() => {
-        try {
-          const stats = backfillProject(
-            db,
-            sessionsJsonlDir(ctx.cwd),
-            projectId(ctx.cwd),
-            config.history.kinds,
-            sidOf(ctx),
-          );
+      // Uses the async chunked variant that yields between files so it doesn't
+      // block the event loop for the entire backlog (the sync version would
+      // stall other extensions' rendering, e.g. statusline animations).
+      backfillProjectAsync(
+        db,
+        sessionsJsonlDir(ctx.cwd),
+        projectId(ctx.cwd),
+        config.history.kinds,
+        sidOf(ctx),
+        (delta) => {
+          counts.addHistory(delta.rows);
+          refreshStatus(ctx);
+        },
+      )
+        .then((stats) => {
           if (stats.files > 0) log(`backfill: ${stats.rows} rows from ${stats.files} session files`);
-          if (stats.rows > 0) {
-            counts.addHistory(stats.rows); // backfill inserted history rows — bump the cached count
-            refreshStatus(ctx); // backfill grew hist — update footer
-          }
-        } catch (err) {
-          reportError("backfill", err);
-        }
-      }, 0);
+        })
+        .catch((err) => reportError("backfill", err));
 
       // Auto evolution passes (both default on, matching MiMoCode; gated by interval + auto flag).
       if (event.reason === "startup" || event.reason === "new") {
@@ -489,16 +489,29 @@ export default function piMimoCme(pi: ExtensionAPI) {
       // Seed the cached footer counters once from COUNT(*), then the per-turn
       // paths only do arithmetic. Reseeding every session_start is also the
       // self-heal: any drift from a prior session starts fresh here.
-      counts.seed(db, projectId(ctx.cwd));
-      refreshStatus(ctx); // initial footer (backfill above refreshes again once it lands)
+      //
+      // Deferred to next tick: seed() runs two synchronous COUNT(*) queries on
+      // DatabaseSync which block the event loop. Yielding here lets other
+      // extensions (statusline animations, etc.) render their first frame
+      // without a stall. The footer shows "…" until the seed lands.
+      // Split the two COUNT(*) seed queries across separate ticks so neither
+      // blocks the event loop long enough to stall other extensions' rendering.
+      const pid = projectId(ctx.cwd);
+      setTimeout(() => {
+        counts.reseedMemory(db);
+        setTimeout(() => {
+          counts.reseedHistory(db, pid);
+          refreshStatus(ctx); // both counters seeded — show initial footer
+        }, 0);
+      }, 0);
 
       // One-shot "memory is alive" heartbeat: confirms the extension loaded and
       // the memory pipeline is armed. 2-second delay lets the UI settle first.
       // Fires every session start (startup, new, resume, fork) — the user
       // always sees at least one proof-of-life signal per session.
       if (ctx.hasUI) {
-        const snap = counts.snapshot();
         setTimeout(() => {
+          const snap = counts.snapshot();
           notify(`🧠 mimo-cme: memory active — ${snap.memIdx} idx · ${snap.projHist} hist`);
         }, 2000);
       }
