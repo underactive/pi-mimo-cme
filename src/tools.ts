@@ -57,21 +57,33 @@ export function registerMemoryTool(pi: ExtensionAPI, deps: ToolDeps): void {
     description:
       "Search your persistent memory layers (session checkpoints, project memory, global memory) with BM25 full-text search over markdown bodies. " +
       "Use this FIRST when past context might already record the answer — before asking the user or re-deriving it. " +
-      "Hits return path / scope / type / score / snippet; Read the path for the full body.",
+      "Hits return path / scope / type / score / snippet; Read the path for the full body. " +
+      "NOT for searching arbitrary repo files — use grep (pattern + path) or read (path) for that. This tool requires `query`.",
     promptSnippet: "Search persistent memory layers (BM25 full-text over memory files)",
     promptGuidelines: [
       "Use the memory tool first when the user references past work, prior decisions, or anything memory may already record — before asking the user.",
+      "Do NOT pass grep/read parameters (pattern, path) — memory only accepts query plus optional scope/limit/type filters.",
+      "For this repo's curated memory use scope=projects (plural). scope=project (singular) is invalid here — that value belongs to the history tool.",
       "If the memory tool returns nothing useful, escalate to the history tool for raw past-conversation search.",
     ],
     parameters: Type.Object({
-      query: Type.String({ description: "Search query (BM25 over markdown bodies)" }),
+      query: Type.String({
+        description:
+          "Required search text (BM25 over indexed memory markdown). Use keywords or phrases — not a file path, regex pattern, or glob.",
+      }),
       scope: Type.Optional(
         StringEnum(["global", "projects", "sessions", "cc"] as const, {
-          description: "Restrict to one memory scope",
+          description:
+            "Optional memory-layer filter. Allowed: global | projects | sessions | cc. Omit to search all layers. " +
+            "Use projects (plural) for this repo — NOT project (singular; that is history-only).",
         }),
       ),
       scope_id: Type.Optional(
-        Type.String({ description: "Scope id: session id or 12-hex project id hash" }),
+        Type.String({
+          description:
+            "Optional scope identifier: session id (when scope=sessions) or 12-hex project hash (when scope=projects). " +
+            "Omit for scope=projects to default to the current project.",
+        }),
       ),
       type: Type.Optional(
         Type.String({ description: "Memory type filter: memory | checkpoint | notes | free" }),
@@ -109,20 +121,31 @@ export function registerHistoryTool(pi: ExtensionAPI, deps: ToolDeps): void {
       "memory is your curated notebook — small, fast, semantically organized. ALWAYS try `memory` first. " +
       "history is the unindexed firehose of your past sessions — use it for verbatim recall (exact error text, an old command, a specific tool output) when curated memory has no answer. " +
       "operation=search: AND full-text search with filters; returns message_ids. " +
-      "operation=around: fetch ±N rows around a message_id from a previous search.",
+      "operation=around: fetch ±N rows around a message_id from a previous search. " +
+      "NOT for searching arbitrary repo files — use grep (pattern + path) or read (path) for that.",
     promptSnippet: "Search raw past-session conversation history (escalation target after memory)",
     promptGuidelines: [
       "Use the history tool only after the memory tool returned nothing useful; then drill into context with operation=around.",
+      "Do NOT pass grep/read parameters (pattern, path) — history accepts query (for search) or message_id (for around).",
+      "scope=project (singular, default) limits to this repo; scope=global searches all repos. The memory tool uses scope=projects (plural) — do not mix the two.",
     ],
     parameters: Type.Object({
       operation: StringEnum(["search", "around"] as const, {
         description: "search: full-text query; around: window around a message_id",
         default: "search",
       }),
-      query: Type.Optional(Type.String({ description: "Search query (AND-joined tokens)" })),
+      query: Type.Optional(
+        Type.String({
+          description:
+            "Required when operation=search. Text to find in past conversation (tokens AND-joined). " +
+            "Not a file path or regex — use grep for that.",
+        }),
+      ),
       scope: Type.Optional(
         StringEnum(["project", "global"] as const, {
-          description: "project (default): this project only; global: all projects",
+          description:
+            "Search boundary for history rows. project (default): this repo only; global: all repos. " +
+            "Note: the memory tool uses scope=projects (plural) — different tool, different allowed value.",
         }),
       ),
       session_id: Type.Optional(Type.String({ description: "Restrict to one session" })),
